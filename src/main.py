@@ -10,7 +10,7 @@ from google.oauth2.service_account import Credentials
 app = App(token=os.environ["SLACK_BOT_TOKEN"])
 
 # Función para guardar en Google Sheets
-def guardar_en_sheet(fecha, cobrador, descripcion, numero, monto_bs, forma_pago, banco, tasa_bcv, monto_usd):
+def guardar_en_sheet(fecha, cobrador, descripcion, numero, cedula, monto_bs, forma_pago, banco, tasa_bcv, monto_usd):
     try:
         creds_json = json.loads(os.environ["GOOGLE_CREDENTIALS"])
         creds_json["private_key"] = creds_json["private_key"].replace("\\n", "\n")
@@ -23,12 +23,11 @@ def guardar_en_sheet(fecha, cobrador, descripcion, numero, monto_bs, forma_pago,
         )
         cliente = gspread.authorize(creds)
         sheet = cliente.open_by_key(os.environ["SHEET_ID"]).worksheet("Pagos Recibidos")
-        sheet.append_row([fecha, descripcion, numero, "", monto_bs, forma_pago, banco, monto_usd, tasa_bcv, cobrador])
+        sheet.append_row([fecha, descripcion, numero, cedula, monto_bs, forma_pago, banco, monto_usd, tasa_bcv, cobrador])
         print("✅ Cobro guardado en Google Sheets")
     except Exception as e:
         print(f"❌ Error guardando en sheet: {e}")
 
-# Cuando alguien escribe /cobro
 @app.command("/cobro")
 def reportar_cobro(ack, body, client):
     ack()
@@ -42,16 +41,27 @@ def reportar_cobro(ack, body, client):
             "blocks": [
                 {
                     "type": "input",
+                    "block_id": "nombre_cobrador",
+                    "label": {"type": "plain_text", "text": "Nombre del Cobrador"},
+                    "element": {"type": "plain_text_input", "action_id": "valor"}
+                },
+                {
+                    "type": "input",
                     "block_id": "descripcion",
-                    "label": {"type": "plain_text", "text": "Descripción (Nombre del cliente)"},
+                    "label": {"type": "plain_text", "text": "Nombre del Cliente"},
+                    "element": {"type": "plain_text_input", "action_id": "valor"}
+                },
+                {
+                    "type": "input",
+                    "block_id": "cedula",
+                    "label": {"type": "plain_text", "text": "Cédula del Cliente"},
                     "element": {"type": "plain_text_input", "action_id": "valor"}
                 },
                 {
                     "type": "input",
                     "block_id": "numero",
-                    "label": {"type": "plain_text", "text": "Número (teléfono o referencia)"},
-                    "element": {"type": "plain_text_input", "action_id": "valor"},
-                    "optional": True
+                    "label": {"type": "plain_text", "text": "Teléfono o Referencia"},
+                    "element": {"type": "plain_text_input", "action_id": "valor"}
                 },
                 {
                     "type": "input",
@@ -106,49 +116,41 @@ def reportar_cobro(ack, body, client):
         }
     )
 
-# Cuando el cobrador llena el formulario y le da Enviar
 @app.view("form_cobro")
 def recibir_cobro(ack, body, client):
     ack()
     valores = body["view"]["state"]["values"]
-
+    nombre_cobrador = valores["nombre_cobrador"]["valor"]["value"]
     descripcion = valores["descripcion"]["valor"]["value"]
-    numero_raw = valores["numero"]["valor"]["value"]
-    numero = numero_raw if numero_raw else "—"
+    cedula = valores["cedula"]["valor"]["value"]
+    numero = valores["numero"]["valor"]["value"]
     monto_bs_str = valores["monto_bs"]["valor"]["value"]
     forma_pago = valores["forma_pago"]["valor"]["selected_option"]["value"]
     banco = valores["banco"]["valor"]["selected_option"]["value"]
     tasa_bcv_str = valores["tasa_bcv"]["valor"]["value"]
-    cobrador = body["user"]["id"]
-
-    # Fecha y hora en zona horaria de Venezuela (Caracas)
+    cobrador_slack = body["user"]["id"]
     fecha = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y %H:%M")
-
-    # Calcular monto en USD
     try:
         monto_bs_num = float(monto_bs_str.replace(".", "").replace(",", "."))
         tasa_bcv_num = float(tasa_bcv_str.replace(".", "").replace(",", "."))
-        monto_usd = monto_bs_num / tasa_bcv_num
-        monto_usd_str = f"${monto_usd:,.2f}"
+        monto_usd_str = f"${monto_bs_num/tasa_bcv_num:,.2f}"
         monto_bs_fmt = f"Bs. {monto_bs_num:,.2f}"
     except (ValueError, ZeroDivisionError):
         monto_usd_str = "(No calculable)"
         monto_bs_fmt = f"Bs. {monto_bs_str}"
-
-    texto_reporte = (
+    texto = (
         f"*Nuevo cobro reportado* 💰\n"
         f"*Fecha:* {fecha}\n"
-        f"*Cobrador:* <@{cobrador}>\n"
-        f"*Descripción:* {descripcion}\n"
-        f"*Número:* {numero}\n"
+        f"*Cobrador:* {nombre_cobrador} (<@{cobrador_slack}>)\n"
+        f"*Cliente:* {descripcion}\n"
+        f"*Cédula:* {cedula}\n"
+        f"*Teléfono:* {numero}\n"
         f"*Monto Bs:* {monto_bs_fmt}\n"
         f"*Forma de Pago:* {forma_pago}\n"
         f"*Banco:* {banco}\n"
         f"*Tasa BCV:* {tasa_bcv_str}\n"
         f"*Monto USD:* {monto_usd_str}"
     )
-
-    # Guardar datos en el mensaje para usarlos al aprobar
     client.chat_postMessage(
         channel="#cobranzas-log",
         text="Nuevo cobro reportado",
@@ -156,9 +158,10 @@ def recibir_cobro(ack, body, client):
             "event_type": "cobro_reportado",
             "event_payload": {
                 "fecha": fecha,
-                "cobrador": cobrador,
+                "cobrador": nombre_cobrador,
                 "descripcion": descripcion,
                 "numero": numero,
+                "cedula": cedula,
                 "monto_bs": monto_bs_fmt,
                 "forma_pago": forma_pago,
                 "banco": banco,
@@ -167,40 +170,35 @@ def recibir_cobro(ack, body, client):
             }
         },
         blocks=[
-            {"type": "section", "text": {"type": "mrkdwn", "text": texto_reporte}},
+            {"type": "section", "text": {"type": "mrkdwn", "text": texto}},
             {"type": "actions", "elements": [
-                {"type": "button", "text": {"type": "plain_text", "text": "✅ Aprobar"},
-                 "style": "primary", "action_id": "aprobar"},
-                {"type": "button", "text": {"type": "plain_text", "text": "❌ Rechazar"},
-                 "style": "danger", "action_id": "rechazar"}
+                {"type": "button", "text": {"type": "plain_text", "text": "✅ Aprobar"}, "style": "primary", "action_id": "aprobar"},
+                {"type": "button", "text": {"type": "plain_text", "text": "❌ Rechazar"}, "style": "danger", "action_id": "rechazar"}
             ]}
         ]
     )
 
-# Botón Aprobar
 @app.action("aprobar")
 def aprobar(ack, body, client):
     ack()
     texto_original = body["message"]["blocks"][0]["text"]["text"]
     fecha_revision = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y %H:%M")
-
-    # Obtener datos del metadata para guardar en sheet
     try:
-        metadata = body["message"].get("metadata", {}).get("event_payload", {})
+        meta = body["message"].get("metadata", {}).get("event_payload", {})
         guardar_en_sheet(
-            metadata.get("fecha", fecha_revision),
-            metadata.get("cobrador", body["user"]["id"]),
-            metadata.get("descripcion", ""),
-            metadata.get("numero", ""),
-            metadata.get("monto_bs", ""),
-            metadata.get("forma_pago", ""),
-            metadata.get("banco", ""),
-            metadata.get("tasa_bcv", ""),
-            metadata.get("monto_usd", "")
+            meta.get("fecha", fecha_revision),
+            meta.get("cobrador", body["user"]["id"]),
+            meta.get("descripcion", ""),
+            meta.get("numero", ""),
+            meta.get("cedula", ""),
+            meta.get("monto_bs", ""),
+            meta.get("forma_pago", ""),
+            meta.get("banco", ""),
+            meta.get("tasa_bcv", ""),
+            meta.get("monto_usd", "")
         )
     except Exception as e:
-        print(f"Error al guardar en sheet: {e}")
-
+        print(f"Error: {e}")
     client.chat_update(
         channel=body["channel"]["id"],
         ts=body["message"]["ts"],
@@ -209,7 +207,6 @@ def aprobar(ack, body, client):
                  "text": f"✅ *APROBADO* por <@{body['user']['id']}> el {fecha_revision}\n\n{texto_original}"}}]
     )
 
-# Botón Rechazar
 @app.action("rechazar")
 def rechazar(ack, body, client):
     ack()
@@ -223,7 +220,6 @@ def rechazar(ack, body, client):
                  "text": f"❌ *RECHAZADO* por <@{body['user']['id']}> el {fecha_revision}\n\n{texto_original}"}}]
     )
 
-# Encender Robotín usando Socket Mode (sin URL pública)
 if __name__ == "__main__":
     print("🤖 Robotín está despierto y conectándose a Slack...")
     SocketModeHandler(app, os.environ["SLACK_APP_TOKEN"]).start()
