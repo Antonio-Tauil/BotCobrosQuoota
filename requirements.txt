@@ -2,3 +2,4 @@ slack_bolt
 slack_sdk
 gspread
 google-auth
+gspread==6.1.2
