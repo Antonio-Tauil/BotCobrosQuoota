@@ -25,11 +25,23 @@ def guardar_en_contactados(fecha, nombre, telefono, cedula, compromiso, cobrador
             ]
         )
         cliente = gspread.authorize(creds)
-        sheet = cliente.open_by_key(os.environ["SHEET_ID"]).worksheet("Contactados")
+        spreadsheet = cliente.open_by_key(os.environ["SHEET_ID"])
+        
+        # Buscar la hoja "Contactados" tolerando mayúsculas/espacios
+        sheet = None
+        for ws in spreadsheet.worksheets():
+            if ws.title.strip().lower() == "contactados":
+                sheet = ws
+                break
+        
+        if sheet is None:
+            print(f"❌ No se encontró la hoja 'Contactados'. Hojas disponibles: {[ws.title for ws in spreadsheet.worksheets()]}")
+            return
+        
         sheet.append_row([fecha, nombre, telefono, cedula, compromiso, cobrador, comentario])
-        print("✅ Contacto guardado en Google Sheets")
+        print(f"✅ Contacto guardado en hoja '{sheet.title}'")
     except Exception as e:
-        print(f"❌ Error guardando en Contactados: {e}")
+        print(f"❌ Error guardando en Contactados: {type(e).__name__}: {e}")
 
 
 @app.command("/contactar")
