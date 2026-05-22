@@ -9,6 +9,127 @@ from google.oauth2.service_account import Credentials
 
 app = App(token=os.environ["SLACK_BOT_TOKEN"])
 
+
+# ============ NUEVO COMANDO /contactar ============
+
+# Función para guardar en hoja "Contactados"
+def guardar_en_contactados(fecha, nombre, telefono, cedula, compromiso, cobrador, comentario):
+    try:
+        creds_json = json.loads(os.environ["GOOGLE_CREDENTIALS"])
+        creds_json["private_key"] = creds_json["private_key"].replace("\\n", "\n")
+        creds = Credentials.from_service_account_info(
+            creds_json,
+            scopes=[
+                "https://spreadsheets.google.com/feeds",
+                "https://www.googleapis.com/auth/drive"
+            ]
+        )
+        cliente = gspread.authorize(creds)
+        sheet = cliente.open_by_key(os.environ["SHEET_ID"]).worksheet("Contactados")
+        sheet.append_row([fecha, nombre, telefono, cedula, compromiso, cobrador, comentario])
+        print("✅ Contacto guardado en Google Sheets")
+    except Exception as e:
+        print(f"❌ Error guardando en Contactados: {e}")
+
+
+@app.command("/contactar")
+def reportar_contacto(ack, body, client):
+    ack()
+    client.views_open(
+        trigger_id=body["trigger_id"],
+        view={
+            "type": "modal",
+            "callback_id": "form_contactar",
+            "title": {"type": "plain_text", "text": "Reportar Contacto"},
+            "submit": {"type": "plain_text", "text": "Enviar"},
+            "blocks": [
+                {
+                    "type": "input",
+                    "block_id": "nombre",
+                    "label": {"type": "plain_text", "text": "Nombre del Cliente"},
+                    "element": {"type": "plain_text_input", "action_id": "valor"}
+                },
+                {
+                    "type": "input",
+                    "block_id": "telefono",
+                    "label": {"type": "plain_text", "text": "Teléfono"},
+                    "element": {"type": "plain_text_input", "action_id": "valor"}
+                },
+                {
+                    "type": "input",
+                    "block_id": "cedula",
+                    "label": {"type": "plain_text", "text": "Cédula"},
+                    "element": {"type": "plain_text_input", "action_id": "valor"}
+                },
+                {
+                    "type": "input",
+                    "block_id": "compromiso",
+                    "label": {"type": "plain_text", "text": "Compromiso de pago (DD/MM/YYYY)"},
+                    "element": {"type": "plain_text_input", "action_id": "valor"}
+                },
+                {
+                    "type": "input",
+                    "block_id": "cobrador",
+                    "label": {"type": "plain_text", "text": "Cobrador"},
+                    "element": {
+                        "type": "static_select",
+                        "action_id": "valor",
+                        "placeholder": {"type": "plain_text", "text": "Selecciona"},
+                        "options": [
+                            {"text": {"type": "plain_text", "text": "DIEGO"}, "value": "DIEGO"},
+                            {"text": {"type": "plain_text", "text": "IARA"}, "value": "IARA"},
+                            {"text": {"type": "plain_text", "text": "REBECA"}, "value": "REBECA"},
+                            {"text": {"type": "plain_text", "text": "MARIANGEL"}, "value": "MARIANGEL"}
+                        ]
+                    }
+                },
+                {
+                    "type": "input",
+                    "block_id": "comentario",
+                    "label": {"type": "plain_text", "text": "Comentario"},
+                    "element": {"type": "plain_text_input", "action_id": "valor", "multiline": True}
+                }
+            ]
+        }
+    )
+
+
+@app.view("form_contactar")
+def recibir_contacto(ack, body, client):
+    ack()
+    valores = body["view"]["state"]["values"]
+    nombre = valores["nombre"]["valor"]["value"]
+    telefono = valores["telefono"]["valor"]["value"]
+    cedula = valores["cedula"]["valor"]["value"]
+    compromiso = valores["compromiso"]["valor"]["value"]
+    cobrador = valores["cobrador"]["valor"]["selected_option"]["value"]
+    comentario = valores["comentario"]["valor"]["value"]
+    usuario_slack = body["user"]["id"]
+    fecha = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y")
+    
+    # Guardar directamente en la hoja
+    guardar_en_contactados(fecha, nombre, telefono, cedula, compromiso, cobrador, comentario)
+    
+    # Enviar mensaje al canal
+    texto = (
+        f"*Nuevo contacto registrado* 📞\n"
+        f"*Fecha:* {fecha}\n"
+        f"*Reportado por:* <@{usuario_slack}>\n"
+        f"*Cliente:* {nombre}\n"
+        f"*Teléfono:* {telefono}\n"
+        f"*Cédula:* {cedula}\n"
+        f"*Compromiso de pago:* {compromiso}\n"
+        f"*Cobrador:* {cobrador}\n"
+        f"*Comentario:* {comentario}"
+    )
+    client.chat_postMessage(
+        channel="#cobranzas-contactados",
+        text="Nuevo contacto registrado",
+        blocks=[{"type": "section", "text": {"type": "mrkdwn", "text": texto}}]
+    )
+
+# ============ FIN COMANDO /contactar ============
+
 # Función para guardar en Google Sheets
 def guardar_en_sheet(fecha, cobrador, descripcion, numero, cedula, monto_bs, forma_pago, banco, tasa_bcv, monto_usd):
     try:
