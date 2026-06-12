@@ -353,6 +353,218 @@ def rechazar(ack, body, client):
                  "text": f"❌ *RECHAZADO* por <@{body['user']['id']}> el {fecha_revision}\n\n{texto_original}"}}]
     )
 
+
+# ============ COMANDO /domiciliar ============
+
+# Función para guardar en hoja "Domiciliación"
+def guardar_en_domiciliacion(fecha, empresa, cuenta, monto_bs, banco, monto_usd, tasa_bcv, cobrador):
+    try:
+        creds_json = json.loads(os.environ["GOOGLE_CREDENTIALS"])
+        creds_json["private_key"] = creds_json["private_key"].replace("\\n", "\n")
+        creds = Credentials.from_service_account_info(
+            creds_json,
+            scopes=[
+                "https://spreadsheets.google.com/feeds",
+                "https://www.googleapis.com/auth/drive"
+            ]
+        )
+        cliente = gspread.authorize(creds)
+        spreadsheet = cliente.open_by_key(os.environ["SHEET_ID"])
+
+        # Buscar la hoja "Domiciliación" tolerando mayúsculas, espacios y acento
+        sheet = None
+        for ws in spreadsheet.worksheets():
+            titulo = ws.title.strip().lower()
+            if titulo in ("domiciliación", "domiciliacion"):
+                sheet = ws
+                break
+
+        if sheet is None:
+            print(f"❌ No se encontró la hoja 'Domiciliación'. Hojas disponibles: {[ws.title for ws in spreadsheet.worksheets()]}")
+            return
+
+        sheet.append_row([fecha, empresa, cuenta, monto_bs, banco, monto_usd, tasa_bcv, cobrador])
+        print(f"✅ Domiciliación guardada en hoja '{sheet.title}'")
+    except Exception as e:
+        print(f"❌ Error guardando en Domiciliación: {type(e).__name__}: {e}")
+
+@app.command("/domiciliar")
+def reportar_domiciliacion(ack, body, client):
+    ack()
+    client.views_open(
+        trigger_id=body["trigger_id"],
+        view={
+            "type": "modal",
+            "callback_id": "form_domiciliar",
+            "title": {"type": "plain_text", "text": "Registrar Domiciliación"},
+            "submit": {"type": "plain_text", "text": "Enviar"},
+            "blocks": [
+                {
+                    "type": "input",
+                    "block_id": "empresa",
+                    "label": {"type": "plain_text", "text": "Empresa"},
+                    "element": {"type": "plain_text_input", "action_id": "valor"}
+                },
+                {
+                    "type": "input",
+                    "block_id": "cuenta",
+                    "label": {"type": "plain_text", "text": "Cuenta por cobrar"},
+                    "element": {"type": "plain_text_input", "action_id": "valor"}
+                },
+                {
+                    "type": "input",
+                    "block_id": "monto_bs",
+                    "label": {"type": "plain_text", "text": "Monto en Bs"},
+                    "element": {"type": "plain_text_input", "action_id": "valor"}
+                },
+                {
+                    "type": "input",
+                    "block_id": "banco",
+                    "label": {"type": "plain_text", "text": "Banco"},
+                    "element": {
+                        "type": "static_select",
+                        "action_id": "valor",
+                        "placeholder": {"type": "plain_text", "text": "Selecciona"},
+                        "options": [
+                            {"text": {"type": "plain_text", "text": "BDV - Banco de Venezuela"}, "value": "BDV"},
+                            {"text": {"type": "plain_text", "text": "BNC - Banco Nacional de Crédito"}, "value": "BNC"},
+                            {"text": {"type": "plain_text", "text": "BOD"}, "value": "BOD"},
+                            {"text": {"type": "plain_text", "text": "Mercantil"}, "value": "Mercantil"},
+                            {"text": {"type": "plain_text", "text": "Provincial"}, "value": "Provincial"},
+                            {"text": {"type": "plain_text", "text": "Bicentenario"}, "value": "Bicentenario"},
+                            {"text": {"type": "plain_text", "text": "Banesco"}, "value": "Banesco"},
+                            {"text": {"type": "plain_text", "text": "Otro"}, "value": "Otro"}
+                        ]
+                    }
+                },
+                {
+                    "type": "input",
+                    "block_id": "tasa_bcv",
+                    "label": {"type": "plain_text", "text": "Tasa BCV (Bs por USD)"},
+                    "element": {"type": "plain_text_input", "action_id": "valor"}
+                },
+                {
+                    "type": "input",
+                    "block_id": "cobrador",
+                    "label": {"type": "plain_text", "text": "Cobrador"},
+                    "element": {
+                        "type": "static_select",
+                        "action_id": "valor",
+                        "placeholder": {"type": "plain_text", "text": "Selecciona"},
+                        "options": [
+                            {"text": {"type": "plain_text", "text": "DIEGO"}, "value": "DIEGO"},
+                            {"text": {"type": "plain_text", "text": "IARA"}, "value": "IARA"},
+                            {"text": {"type": "plain_text", "text": "REBECA"}, "value": "REBECA"},
+                            {"text": {"type": "plain_text", "text": "MARIANGEL"}, "value": "MARIANGEL"}
+                        ]
+                    }
+                }
+            ]
+        }
+    )
+
+@app.view("form_domiciliar")
+def recibir_domiciliacion(ack, body, client):
+    ack()
+    valores = body["view"]["state"]["values"]
+    empresa = valores["empresa"]["valor"]["value"]
+    cuenta = valores["cuenta"]["valor"]["value"]
+    monto_bs_str = valores["monto_bs"]["valor"]["value"]
+    banco = valores["banco"]["valor"]["selected_option"]["value"]
+    tasa_bcv_str = valores["tasa_bcv"]["valor"]["value"]
+    cobrador = valores["cobrador"]["valor"]["selected_option"]["value"]
+    usuario_slack = body["user"]["id"]
+    fecha = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y %H:%M")
+    try:
+        monto_bs_num = float(monto_bs_str.replace(".", "").replace(",", "."))
+        tasa_bcv_num = float(tasa_bcv_str.replace(".", "").replace(",", "."))
+        monto_usd_str = f"${monto_bs_num/tasa_bcv_num:,.2f}"
+        monto_bs_fmt = f"Bs. {monto_bs_num:,.2f}"
+    except (ValueError, ZeroDivisionError):
+        monto_usd_str = "(No calculable)"
+        monto_bs_fmt = f"Bs. {monto_bs_str}"
+    texto = (
+        f"*Nueva domiciliación reportada* 🏦\n"
+        f"*Fecha:* {fecha}\n"
+        f"*Reportado por:* <@{usuario_slack}>\n"
+        f"*Empresa:* {empresa}\n"
+        f"*Cuenta por cobrar:* {cuenta}\n"
+        f"*Monto Bs:* {monto_bs_fmt}\n"
+        f"*Banco:* {banco}\n"
+        f"*Tasa BCV:* {tasa_bcv_str}\n"
+        f"*Monto USD:* {monto_usd_str}\n"
+        f"*Cobrador:* {cobrador}"
+    )
+    try:
+        client.chat_postMessage(
+            channel="#cobranzas-domiciliacion",
+            text="Nueva domiciliación reportada",
+            metadata={
+                "event_type": "domiciliacion_reportada",
+                "event_payload": {
+                    "fecha": fecha,
+                    "empresa": empresa,
+                    "cuenta": cuenta,
+                    "monto_bs": monto_bs_fmt,
+                    "banco": banco,
+                    "monto_usd": monto_usd_str,
+                    "tasa_bcv": tasa_bcv_str,
+                    "cobrador": cobrador
+                }
+            },
+            blocks=[
+                {"type": "section", "text": {"type": "mrkdwn", "text": texto}},
+                {"type": "actions", "elements": [
+                    {"type": "button", "text": {"type": "plain_text", "text": "✅ Aprobar"}, "style": "primary", "action_id": "aprobar_domiciliacion"},
+                    {"type": "button", "text": {"type": "plain_text", "text": "❌ Rechazar"}, "style": "danger", "action_id": "rechazar_domiciliacion"}
+                ]}
+            ]
+        )
+    except Exception as e:
+        print(f"⚠️ No se pudo enviar mensaje al canal de domiciliación: {e}")
+
+@app.action("aprobar_domiciliacion")
+def aprobar_domiciliacion(ack, body, client):
+    ack()
+    texto_original = body["message"]["blocks"][0]["text"]["text"]
+    fecha_revision = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y %H:%M")
+    try:
+        meta = body["message"].get("metadata", {}).get("event_payload", {})
+        guardar_en_domiciliacion(
+            meta.get("fecha", fecha_revision),
+            meta.get("empresa", ""),
+            meta.get("cuenta", ""),
+            meta.get("monto_bs", ""),
+            meta.get("banco", ""),
+            meta.get("monto_usd", ""),
+            meta.get("tasa_bcv", ""),
+            meta.get("cobrador", "")
+        )
+    except Exception as e:
+        print(f"Error: {e}")
+    client.chat_update(
+        channel=body["channel"]["id"],
+        ts=body["message"]["ts"],
+        text="Domiciliación APROBADA",
+        blocks=[{"type": "section", "text": {"type": "mrkdwn",
+                 "text": f"✅ *APROBADO* por <@{body['user']['id']}> el {fecha_revision}\n\n{texto_original}"}}]
+    )
+
+@app.action("rechazar_domiciliacion")
+def rechazar_domiciliacion(ack, body, client):
+    ack()
+    texto_original = body["message"]["blocks"][0]["text"]["text"]
+    fecha_revision = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y %H:%M")
+    client.chat_update(
+        channel=body["channel"]["id"],
+        ts=body["message"]["ts"],
+        text="Domiciliación RECHAZADA",
+        blocks=[{"type": "section", "text": {"type": "mrkdwn",
+                 "text": f"❌ *RECHAZADO* por <@{body['user']['id']}> el {fecha_revision}\n\n{texto_original}"}}]
+    )
+
+# ============ FIN COMANDO /domiciliar ============
+
 if __name__ == "__main__":
     print("🤖 Robotín está despierto y conectándose a Slack...")
     SocketModeHandler(app, os.environ["SLACK_APP_TOKEN"]).start()
