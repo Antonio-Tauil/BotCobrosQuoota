@@ -731,7 +731,7 @@ def recibir_cobro2(ack, body, client):
         f"*N° referencia pago:* {referencia}"
     )
     client.chat_postMessage(
-        channel="#cobranzas-callcenter",
+        channel="C0BAS4M970S",
         text="Nuevo cobro reportado (Call Center)",
         metadata={
             "event_type": "cobro2_reportado",
