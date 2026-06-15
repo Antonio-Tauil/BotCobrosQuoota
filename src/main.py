@@ -803,4 +803,4 @@ def rechazar_cobro2(ack, body, client):
 
 if __name__ == "__main__":
     print("🤖 Robotín está despierto y conectándose a Slack...")
-    SocketModeHandler(app, os.environ["SLACK_APP_TOKEN"]).start()nviron["SLACK_APP_TOKEN"]).start()
+    SocketModeHandler(app, os.environ["SLACK_APP_TOKEN"]).start()
