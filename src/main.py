@@ -91,7 +91,10 @@ def reportar_contacto(ack, body, client):
                             {"text": {"type": "plain_text", "text": "DIEGO"}, "value": "DIEGO"},
                             {"text": {"type": "plain_text", "text": "IARA"}, "value": "IARA"},
                             {"text": {"type": "plain_text", "text": "REBECA"}, "value": "REBECA"},
-                            {"text": {"type": "plain_text", "text": "MARIANGEL"}, "value": "MARIANGEL"}
+                            {"text": {"type": "plain_text", "text": "MARIANGEL"}, "value": "MARIANGEL"},
+                            {"text": {"type": "plain_text", "text": "LUISMAR"}, "value": "LUISMAR"},
+                            {"text": {"type": "plain_text", "text": "ANGELY"}, "value": "ANGELY"},
+                            {"text": {"type": "plain_text", "text": "DANIEL"}, "value": "DANIEL"}
                         ]
                     }
                 },
@@ -455,7 +458,10 @@ def reportar_domiciliacion(ack, body, client):
                             {"text": {"type": "plain_text", "text": "DIEGO"}, "value": "DIEGO"},
                             {"text": {"type": "plain_text", "text": "IARA"}, "value": "IARA"},
                             {"text": {"type": "plain_text", "text": "REBECA"}, "value": "REBECA"},
-                            {"text": {"type": "plain_text", "text": "MARIANGEL"}, "value": "MARIANGEL"}
+                            {"text": {"type": "plain_text", "text": "MARIANGEL"}, "value": "MARIANGEL"},
+                            {"text": {"type": "plain_text", "text": "LUISMAR"}, "value": "LUISMAR"},
+                            {"text": {"type": "plain_text", "text": "ANGELY"}, "value": "ANGELY"},
+                            {"text": {"type": "plain_text", "text": "DANIEL"}, "value": "DANIEL"}
                         ]
                     }
                 }
@@ -483,12 +489,18 @@ def recibir_domiciliacion(ack, body, client):
     except (ValueError, ZeroDivisionError):
         monto_usd_str = "(No calculable)"
         monto_bs_fmt = f"Bs. {monto_bs_str}"
+    # Formatear "Cuenta por cobrar" como bolívares
+    try:
+        cuenta_num = float(cuenta.replace(".", "").replace(",", "."))
+        cuenta_fmt = f"Bs. {cuenta_num:,.2f}"
+    except (ValueError, AttributeError):
+        cuenta_fmt = f"Bs. {cuenta}"
     texto = (
         f"*Nueva domiciliación reportada* 🏦\n"
         f"*Fecha:* {fecha}\n"
         f"*Reportado por:* <@{usuario_slack}>\n"
         f"*Empresa:* {empresa}\n"
-        f"*Cuenta por cobrar:* {cuenta}\n"
+        f"*Cuenta por cobrar:* {cuenta_fmt}\n"
         f"*Monto Bs:* {monto_bs_fmt}\n"
         f"*Banco:* {banco}\n"
         f"*Tasa BCV:* {tasa_bcv_str}\n"
@@ -504,7 +516,7 @@ def recibir_domiciliacion(ack, body, client):
                 "event_payload": {
                     "fecha": fecha,
                     "empresa": empresa,
-                    "cuenta": cuenta,
+                    "cuenta": cuenta_fmt,
                     "monto_bs": monto_bs_fmt,
                     "banco": banco,
                     "monto_usd": monto_usd_str,
