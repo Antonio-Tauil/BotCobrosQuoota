@@ -9,6 +9,7 @@ python robotin-cobros/src/main.py
 ```
 
 ## Dependencias
+deploy 15 junio
 
 Agrega las dependencias necesarias en `requirements.txt` e instálalas con:
 
