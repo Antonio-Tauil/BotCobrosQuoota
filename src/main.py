@@ -26,18 +26,18 @@ def guardar_en_contactados(fecha, nombre, telefono, cedula, compromiso, cobrador
         )
         cliente = gspread.authorize(creds)
         spreadsheet = cliente.open_by_key(os.environ["SHEET_ID"])
-        
+
         # Buscar la hoja "Contactados" tolerando mayúsculas/espacios
         sheet = None
         for ws in spreadsheet.worksheets():
             if ws.title.strip().lower() == "contactados":
                 sheet = ws
                 break
-        
+
         if sheet is None:
             print(f"❌ No se encontró la hoja 'Contactados'. Hojas disponibles: {[ws.title for ws in spreadsheet.worksheets()]}")
             return
-        
+
         sheet.append_row([fecha, nombre, telefono, cedula, compromiso, cobrador, comentario])
         print(f"✅ Contacto guardado en hoja '{sheet.title}'")
     except Exception as e:
@@ -94,7 +94,8 @@ def reportar_contacto(ack, body, client):
                             {"text": {"type": "plain_text", "text": "MARIANGEL"}, "value": "MARIANGEL"},
                             {"text": {"type": "plain_text", "text": "LUISMAR"}, "value": "LUISMAR"},
                             {"text": {"type": "plain_text", "text": "ANGELY"}, "value": "ANGELY"},
-                            {"text": {"type": "plain_text", "text": "DANIEL"}, "value": "DANIEL"}
+                            {"text": {"type": "plain_text", "text": "DANIEL"}, "value": "DANIEL"},
+                            {"text": {"type": "plain_text", "text": "BARBARA"}, "value": "BARBARA"}
                         ]
                     }
                 },
@@ -121,10 +122,10 @@ def recibir_contacto(ack, body, client):
     comentario = valores["comentario"]["valor"]["value"]
     usuario_slack = body["user"]["id"]
     fecha = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y")
-    
+
     # Guardar directamente en la hoja
     guardar_en_contactados(fecha, nombre, telefono, cedula, compromiso, cobrador, comentario)
-    
+
     # Enviar mensaje al canal
     texto = (
         f"*Nuevo contacto registrado* 📞\n"
@@ -461,7 +462,8 @@ def reportar_domiciliacion(ack, body, client):
                             {"text": {"type": "plain_text", "text": "MARIANGEL"}, "value": "MARIANGEL"},
                             {"text": {"type": "plain_text", "text": "LUISMAR"}, "value": "LUISMAR"},
                             {"text": {"type": "plain_text", "text": "ANGELY"}, "value": "ANGELY"},
-                            {"text": {"type": "plain_text", "text": "DANIEL"}, "value": "DANIEL"}
+                            {"text": {"type": "plain_text", "text": "DANIEL"}, "value": "DANIEL"},
+                            {"text": {"type": "plain_text", "text": "BARBARA"}, "value": "BARBARA"}
                         ]
                     }
                 }
