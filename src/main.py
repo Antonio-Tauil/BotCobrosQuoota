@@ -11,7 +11,6 @@ app = App(token=os.environ["SLACK_BOT_TOKEN"])
 
 
 # ============ NUEVO COMANDO /contactar ============
-
 # Función para guardar en hoja "Contactados"
 def guardar_en_contactados(fecha, nombre, telefono, cedula, compromiso, cobrador, comentario):
     try:
@@ -26,18 +25,15 @@ def guardar_en_contactados(fecha, nombre, telefono, cedula, compromiso, cobrador
         )
         cliente = gspread.authorize(creds)
         spreadsheet = cliente.open_by_key(os.environ["SHEET_ID"])
-
         # Buscar la hoja "Contactados" tolerando mayúsculas/espacios
         sheet = None
         for ws in spreadsheet.worksheets():
             if ws.title.strip().lower() == "contactados":
                 sheet = ws
                 break
-
         if sheet is None:
             print(f"❌ No se encontró la hoja 'Contactados'. Hojas disponibles: {[ws.title for ws in spreadsheet.worksheets()]}")
             return
-
         sheet.append_row([fecha, nombre, telefono, cedula, compromiso, cobrador, comentario])
         print(f"✅ Contacto guardado en hoja '{sheet.title}'")
     except Exception as e:
@@ -122,10 +118,8 @@ def recibir_contacto(ack, body, client):
     comentario = valores["comentario"]["valor"]["value"]
     usuario_slack = body["user"]["id"]
     fecha = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y")
-
     # Guardar directamente en la hoja
     guardar_en_contactados(fecha, nombre, telefono, cedula, compromiso, cobrador, comentario)
-
     # Enviar mensaje al canal
     texto = (
         f"*Nuevo contacto registrado* 📞\n"
@@ -143,8 +137,8 @@ def recibir_contacto(ack, body, client):
         text="Nuevo contacto registrado",
         blocks=[{"type": "section", "text": {"type": "mrkdwn", "text": texto}}]
     )
-
 # ============ FIN COMANDO /contactar ============
+
 
 # Función para guardar en Google Sheets
 def guardar_en_sheet(fecha, cobrador, descripcion, numero, cedula, monto_bs, forma_pago, banco, tasa_bcv, monto_usd):
@@ -164,6 +158,7 @@ def guardar_en_sheet(fecha, cobrador, descripcion, numero, cedula, monto_bs, for
         print("✅ Cobro guardado en Google Sheets")
     except Exception as e:
         print(f"❌ Error guardando en sheet: {e}")
+
 
 @app.command("/cobro")
 def reportar_cobro(ack, body, client):
@@ -253,6 +248,7 @@ def reportar_cobro(ack, body, client):
         }
     )
 
+
 @app.view("form_cobro")
 def recibir_cobro(ack, body, client):
     ack()
@@ -315,6 +311,7 @@ def recibir_cobro(ack, body, client):
         ]
     )
 
+
 @app.action("aprobar")
 def aprobar(ack, body, client):
     ack()
@@ -344,6 +341,7 @@ def aprobar(ack, body, client):
                  "text": f"✅ *APROBADO* por <@{body['user']['id']}> el {fecha_revision}\n\n{texto_original}"}}]
     )
 
+
 @app.action("rechazar")
 def rechazar(ack, body, client):
     ack()
@@ -359,7 +357,6 @@ def rechazar(ack, body, client):
 
 
 # ============ COMANDO /domiciliar ============
-
 # Función para guardar en hoja "Domiciliación"
 def guardar_en_domiciliacion(fecha, empresa, cuenta, monto_bs, banco, monto_usd, tasa_bcv, cobrador):
     try:
@@ -374,7 +371,6 @@ def guardar_en_domiciliacion(fecha, empresa, cuenta, monto_bs, banco, monto_usd,
         )
         cliente = gspread.authorize(creds)
         spreadsheet = cliente.open_by_key(os.environ["SHEET_ID"])
-
         # Buscar la hoja "Domiciliación" tolerando mayúsculas, espacios y acento
         sheet = None
         for ws in spreadsheet.worksheets():
@@ -382,15 +378,14 @@ def guardar_en_domiciliacion(fecha, empresa, cuenta, monto_bs, banco, monto_usd,
             if titulo in ("domiciliación", "domiciliacion"):
                 sheet = ws
                 break
-
         if sheet is None:
             print(f"❌ No se encontró la hoja 'Domiciliación'. Hojas disponibles: {[ws.title for ws in spreadsheet.worksheets()]}")
             return
-
         sheet.append_row([fecha, empresa, cuenta, monto_bs, banco, monto_usd, tasa_bcv, cobrador])
         print(f"✅ Domiciliación guardada en hoja '{sheet.title}'")
     except Exception as e:
         print(f"❌ Error guardando en Domiciliación: {type(e).__name__}: {e}")
+
 
 @app.command("/domiciliar")
 def reportar_domiciliacion(ack, body, client):
@@ -471,6 +466,7 @@ def reportar_domiciliacion(ack, body, client):
         }
     )
 
+
 @app.view("form_domiciliar")
 def recibir_domiciliacion(ack, body, client):
     ack()
@@ -537,6 +533,7 @@ def recibir_domiciliacion(ack, body, client):
     except Exception as e:
         print(f"⚠️ No se pudo enviar mensaje al canal de domiciliación: {e}")
 
+
 @app.action("aprobar_domiciliacion")
 def aprobar_domiciliacion(ack, body, client):
     ack()
@@ -564,6 +561,7 @@ def aprobar_domiciliacion(ack, body, client):
                  "text": f"✅ *APROBADO* por <@{body['user']['id']}> el {fecha_revision}\n\n{texto_original}"}}]
     )
 
+
 @app.action("rechazar_domiciliacion")
 def rechazar_domiciliacion(ack, body, client):
     ack()
@@ -576,13 +574,13 @@ def rechazar_domiciliacion(ack, body, client):
         blocks=[{"type": "section", "text": {"type": "mrkdwn",
                  "text": f"❌ *RECHAZADO* por <@{body['user']['id']}> el {fecha_revision}\n\n{texto_original}"}}]
     )
-
 # ============ FIN COMANDO /domiciliar ============
 
-# ============ COMANDO /cobro2 (Call Center Seguros) ============
 
+# ============ COMANDO /cobro2 (Call Center Seguros) ============
 # ID del Google Sheet nuevo "Seguimiento - Call Center Seguros Venezuela"
 SHEET_ID_COBRO2 = "1KbWx1d5ujGmNwjGbdb-c_QAwiEkxJpxLb1BOFOCY9QM"
+
 
 # Función para guardar en el Sheet del Call Center
 def guardar_en_sheet_cobro2(fecha, nombre, telefono, cedula, monto_bs, forma_pago, banco, monto_usd, tasa_bcv, referencia):
@@ -607,6 +605,7 @@ def guardar_en_sheet_cobro2(fecha, nombre, telefono, cedula, monto_bs, forma_pag
         print("✅ Cobro (Call Center) guardado en Google Sheets")
     except Exception as e:
         print(f"❌ Error guardando en sheet cobro2: {type(e).__name__}: {e}")
+
 
 @app.command("/cobro-callcenter")
 def reportar_cobro2(ack, body, client):
@@ -696,6 +695,7 @@ def reportar_cobro2(ack, body, client):
         }
     )
 
+
 @app.view("form_cobro2")
 def recibir_cobro2(ack, body, client):
     ack()
@@ -759,6 +759,7 @@ def recibir_cobro2(ack, body, client):
         ]
     )
 
+
 @app.action("aprobar_cobro2")
 def aprobar_cobro2(ack, body, client):
     ack()
@@ -788,6 +789,7 @@ def aprobar_cobro2(ack, body, client):
                  "text": f"✅ *APROBADO* por <@{body['user']['id']}> el {fecha_revision}\n\n{texto_original}"}}]
     )
 
+
 @app.action("rechazar_cobro2")
 def rechazar_cobro2(ack, body, client):
     ack()
@@ -800,8 +802,281 @@ def rechazar_cobro2(ack, body, client):
         blocks=[{"type": "section", "text": {"type": "mrkdwn",
                  "text": f"❌ *RECHAZADO* por <@{body['user']['id']}> el {fecha_revision}\n\n{texto_original}"}}]
     )
-
 # ============ FIN COMANDO /cobro2 ============
+
+
+# ============ COMANDO /conciliar ============
+# Concilia un pago reportado contra lo que realmente llegó al banco.
+# El bot calcula automáticamente la diferencia y asigna el estado.
+
+# Función para guardar en hoja "Conciliación"
+def guardar_en_conciliacion(fecha_conciliacion, cliente_nombre, cedula, referencia, banco,
+                            monto_reportado, monto_banco, diferencia, estado,
+                            fecha_movimiento, conciliador, observaciones):
+    try:
+        creds_json = json.loads(os.environ["GOOGLE_CREDENTIALS"])
+        creds_json["private_key"] = creds_json["private_key"].replace("\\n", "\n")
+        creds = Credentials.from_service_account_info(
+            creds_json,
+            scopes=[
+                "https://spreadsheets.google.com/feeds",
+                "https://www.googleapis.com/auth/drive"
+            ]
+        )
+        cliente = gspread.authorize(creds)
+        spreadsheet = cliente.open_by_key(os.environ["SHEET_ID"])
+        # Buscar la hoja "Conciliación" tolerando mayúsculas, espacios y acento
+        sheet = None
+        for ws in spreadsheet.worksheets():
+            titulo = ws.title.strip().lower()
+            if titulo in ("conciliación", "conciliacion"):
+                sheet = ws
+                break
+        if sheet is None:
+            print(f"❌ No se encontró la hoja 'Conciliación'. Hojas disponibles: {[ws.title for ws in spreadsheet.worksheets()]}")
+            return
+        sheet.append_row([
+            fecha_conciliacion, cliente_nombre, cedula, referencia, banco,
+            monto_reportado, monto_banco, diferencia, estado,
+            fecha_movimiento, conciliador, observaciones
+        ])
+        print(f"✅ Conciliación guardada en hoja '{sheet.title}'")
+    except Exception as e:
+        print(f"❌ Error guardando en Conciliación: {type(e).__name__}: {e}")
+
+
+@app.command("/conciliar")
+def reportar_conciliacion(ack, body, client):
+    ack()
+    client.views_open(
+        trigger_id=body["trigger_id"],
+        view={
+            "type": "modal",
+            "callback_id": "form_conciliar",
+            "title": {"type": "plain_text", "text": "Conciliar Pago"},
+            "submit": {"type": "plain_text", "text": "Enviar"},
+            "blocks": [
+                {
+                    "type": "input",
+                    "block_id": "cliente",
+                    "label": {"type": "plain_text", "text": "Nombre del Cliente"},
+                    "element": {"type": "plain_text_input", "action_id": "valor"}
+                },
+                {
+                    "type": "input",
+                    "block_id": "cedula",
+                    "label": {"type": "plain_text", "text": "Cédula del Cliente"},
+                    "element": {"type": "plain_text_input", "action_id": "valor"}
+                },
+                {
+                    "type": "input",
+                    "block_id": "referencia",
+                    "label": {"type": "plain_text", "text": "N° de referencia del pago"},
+                    "element": {"type": "plain_text_input", "action_id": "valor"}
+                },
+                {
+                    "type": "input",
+                    "block_id": "banco",
+                    "label": {"type": "plain_text", "text": "Banco"},
+                    "element": {
+                        "type": "static_select",
+                        "action_id": "valor",
+                        "placeholder": {"type": "plain_text", "text": "Selecciona"},
+                        "options": [
+                            {"text": {"type": "plain_text", "text": "BDV - Banco de Venezuela"}, "value": "BDV"},
+                            {"text": {"type": "plain_text", "text": "BNC - Banco Nacional de Crédito"}, "value": "BNC"},
+                            {"text": {"type": "plain_text", "text": "BOD"}, "value": "BOD"},
+                            {"text": {"type": "plain_text", "text": "Mercantil"}, "value": "Mercantil"},
+                            {"text": {"type": "plain_text", "text": "Provincial"}, "value": "Provincial"},
+                            {"text": {"type": "plain_text", "text": "Bicentenario"}, "value": "Bicentenario"},
+                            {"text": {"type": "plain_text", "text": "Banesco"}, "value": "Banesco"},
+                            {"text": {"type": "plain_text", "text": "Otro"}, "value": "Otro"}
+                        ]
+                    }
+                },
+                {
+                    "type": "input",
+                    "block_id": "monto_reportado",
+                    "label": {"type": "plain_text", "text": "Monto reportado (Bs)"},
+                    "element": {"type": "plain_text_input", "action_id": "valor"}
+                },
+                {
+                    "type": "input",
+                    "block_id": "monto_banco",
+                    "label": {"type": "plain_text", "text": "Monto según el banco (Bs)"},
+                    "element": {"type": "plain_text_input", "action_id": "valor"}
+                },
+                {
+                    "type": "input",
+                    "block_id": "fecha_movimiento",
+                    "label": {"type": "plain_text", "text": "Fecha del movimiento bancario (DD/MM/YYYY)"},
+                    "element": {"type": "plain_text_input", "action_id": "valor"}
+                },
+                {
+                    "type": "input",
+                    "block_id": "conciliador",
+                    "label": {"type": "plain_text", "text": "Conciliador"},
+                    "element": {
+                        "type": "static_select",
+                        "action_id": "valor",
+                        "placeholder": {"type": "plain_text", "text": "Selecciona"},
+                        "options": [
+                            {"text": {"type": "plain_text", "text": "DIEGO"}, "value": "DIEGO"},
+                            {"text": {"type": "plain_text", "text": "IARA"}, "value": "IARA"},
+                            {"text": {"type": "plain_text", "text": "REBECA"}, "value": "REBECA"},
+                            {"text": {"type": "plain_text", "text": "MARIANGEL"}, "value": "MARIANGEL"},
+                            {"text": {"type": "plain_text", "text": "LUISMAR"}, "value": "LUISMAR"},
+                            {"text": {"type": "plain_text", "text": "ANGELY"}, "value": "ANGELY"},
+                            {"text": {"type": "plain_text", "text": "DANIEL"}, "value": "DANIEL"},
+                            {"text": {"type": "plain_text", "text": "BARBARA"}, "value": "BARBARA"}
+                        ]
+                    }
+                },
+                {
+                    "type": "input",
+                    "block_id": "observaciones",
+                    "optional": True,
+                    "label": {"type": "plain_text", "text": "Observaciones"},
+                    "element": {"type": "plain_text_input", "action_id": "valor", "multiline": True}
+                }
+            ]
+        }
+    )
+
+
+@app.view("form_conciliar")
+def recibir_conciliacion(ack, body, client):
+    ack()
+    valores = body["view"]["state"]["values"]
+    cliente_nombre = valores["cliente"]["valor"]["value"]
+    cedula = valores["cedula"]["valor"]["value"]
+    referencia = valores["referencia"]["valor"]["value"]
+    banco = valores["banco"]["valor"]["selected_option"]["value"]
+    monto_reportado_str = valores["monto_reportado"]["valor"]["value"]
+    monto_banco_str = valores["monto_banco"]["valor"]["value"]
+    fecha_movimiento = valores["fecha_movimiento"]["valor"]["value"]
+    conciliador = valores["conciliador"]["valor"]["selected_option"]["value"]
+    observaciones = valores["observaciones"]["valor"]["value"] or ""
+    usuario_slack = body["user"]["id"]
+    fecha = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y %H:%M")
+
+    # Calcular diferencia y estado automáticamente
+    try:
+        rep_num = float(monto_reportado_str.replace(".", "").replace(",", "."))
+        banco_num = float(monto_banco_str.replace(".", "").replace(",", "."))
+        diferencia_num = banco_num - rep_num
+        monto_reportado_fmt = f"Bs. {rep_num:,.2f}"
+        monto_banco_fmt = f"Bs. {banco_num:,.2f}"
+        diferencia_fmt = f"Bs. {diferencia_num:,.2f}"
+        # Tolerancia de 1 céntimo para evitar problemas de redondeo
+        if abs(diferencia_num) < 0.01:
+            estado = "Conciliado"
+            emoji_estado = "✅"
+        else:
+            estado = "Con diferencia"
+            emoji_estado = "⚠️"
+    except (ValueError, AttributeError):
+        monto_reportado_fmt = f"Bs. {monto_reportado_str}"
+        monto_banco_fmt = f"Bs. {monto_banco_str}"
+        diferencia_fmt = "(No calculable)"
+        estado = "Revisar manualmente"
+        emoji_estado = "❓"
+
+    texto = (
+        f"*Nueva conciliación reportada* 🧾\n"
+        f"*Fecha:* {fecha}\n"
+        f"*Reportado por:* <@{usuario_slack}>\n"
+        f"*Cliente:* {cliente_nombre}\n"
+        f"*Cédula:* {cedula}\n"
+        f"*N° referencia pago:* {referencia}\n"
+        f"*Banco:* {banco}\n"
+        f"*Monto reportado:* {monto_reportado_fmt}\n"
+        f"*Monto según banco:* {monto_banco_fmt}\n"
+        f"*Diferencia:* {diferencia_fmt}\n"
+        f"*Estado:* {emoji_estado} {estado}\n"
+        f"*Fecha movimiento banco:* {fecha_movimiento}\n"
+        f"*Conciliador:* {conciliador}\n"
+        f"*Observaciones:* {observaciones}"
+    )
+    try:
+        client.chat_postMessage(
+            channel="#cobranzas-conciliacion",
+            text="Nueva conciliación reportada",
+            metadata={
+                "event_type": "conciliacion_reportada",
+                "event_payload": {
+                    "fecha": fecha,
+                    "cliente": cliente_nombre,
+                    "cedula": cedula,
+                    "referencia": referencia,
+                    "banco": banco,
+                    "monto_reportado": monto_reportado_fmt,
+                    "monto_banco": monto_banco_fmt,
+                    "diferencia": diferencia_fmt,
+                    "estado": estado,
+                    "fecha_movimiento": fecha_movimiento,
+                    "conciliador": conciliador,
+                    "observaciones": observaciones
+                }
+            },
+            blocks=[
+                {"type": "section", "text": {"type": "mrkdwn", "text": texto}},
+                {"type": "actions", "elements": [
+                    {"type": "button", "text": {"type": "plain_text", "text": "✅ Aprobar"}, "style": "primary", "action_id": "aprobar_conciliacion"},
+                    {"type": "button", "text": {"type": "plain_text", "text": "❌ Rechazar"}, "style": "danger", "action_id": "rechazar_conciliacion"}
+                ]}
+            ]
+        )
+    except Exception as e:
+        print(f"⚠️ No se pudo enviar mensaje al canal de conciliación: {e}")
+
+
+@app.action("aprobar_conciliacion")
+def aprobar_conciliacion(ack, body, client):
+    ack()
+    texto_original = body["message"]["blocks"][0]["text"]["text"]
+    fecha_revision = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y %H:%M")
+    try:
+        meta = body["message"].get("metadata", {}).get("event_payload", {})
+        guardar_en_conciliacion(
+            meta.get("fecha", fecha_revision),
+            meta.get("cliente", ""),
+            meta.get("cedula", ""),
+            meta.get("referencia", ""),
+            meta.get("banco", ""),
+            meta.get("monto_reportado", ""),
+            meta.get("monto_banco", ""),
+            meta.get("diferencia", ""),
+            meta.get("estado", ""),
+            meta.get("fecha_movimiento", ""),
+            meta.get("conciliador", ""),
+            meta.get("observaciones", "")
+        )
+    except Exception as e:
+        print(f"Error: {e}")
+    client.chat_update(
+        channel=body["channel"]["id"],
+        ts=body["message"]["ts"],
+        text="Conciliación APROBADA",
+        blocks=[{"type": "section", "text": {"type": "mrkdwn",
+                 "text": f"✅ *APROBADO* por <@{body['user']['id']}> el {fecha_revision}\n\n{texto_original}"}}]
+    )
+
+
+@app.action("rechazar_conciliacion")
+def rechazar_conciliacion(ack, body, client):
+    ack()
+    texto_original = body["message"]["blocks"][0]["text"]["text"]
+    fecha_revision = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y %H:%M")
+    client.chat_update(
+        channel=body["channel"]["id"],
+        ts=body["message"]["ts"],
+        text="Conciliación RECHAZADA",
+        blocks=[{"type": "section", "text": {"type": "mrkdwn",
+                 "text": f"❌ *RECHAZADO* por <@{body['user']['id']}> el {fecha_revision}\n\n{texto_original}"}}]
+    )
+# ============ FIN COMANDO /conciliar ============
+
 
 if __name__ == "__main__":
     print("🤖 Robotín está despierto y conectándose a Slack...")
