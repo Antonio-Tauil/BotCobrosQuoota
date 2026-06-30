@@ -1,4 +1,5 @@
 import os
+import re
 import json
 import gspread
 from datetime import datetime
@@ -8,6 +9,41 @@ from slack_bolt.adapter.socket_mode import SocketModeHandler
 from google.oauth2.service_account import Credentials
 
 app = App(token=os.environ["SLACK_BOT_TOKEN"])
+
+
+# ============ FUNCIÓN PARA LEER NÚMEROS EN CUALQUIER FORMATO ============
+# Entiende: 12420  |  12420,53  |  12.420,53  |  12,420.53  |  587.4059  |  Bs. 1.500,00
+def parse_numero(texto):
+    if texto is None:
+        raise ValueError("vacío")
+    # Dejar solo dígitos, punto, coma y signo negativo (quita "Bs", "$", espacios, etc.)
+    s = re.sub(r"[^0-9.,\-]", "", str(texto).strip())
+    if s in ("", "-", ".", ","):
+        raise ValueError("sin dígitos")
+    tiene_punto = "." in s
+    tiene_coma = "," in s
+    if tiene_punto and tiene_coma:
+        # El separador que esté más a la derecha es el decimal
+        if s.rfind(",") > s.rfind("."):
+            s = s.replace(".", "").replace(",", ".")   # coma decimal (venezolano)
+        else:
+            s = s.replace(",", "")                     # punto decimal (gringo)
+    elif tiene_coma:
+        if s.count(",") > 1:
+            s = s.replace(",", "")                     # varias comas = miles
+        else:
+            _, _, dec = s.partition(",")
+            s = s.replace(",", "") if len(dec) == 3 else s.replace(",", ".")
+    elif tiene_punto:
+        if s.count(".") > 1:
+            s = s.replace(".", "")                     # varios puntos = miles
+        else:
+            _, _, dec = s.partition(".")
+            if len(dec) == 3:
+                s = s.replace(".", "")                 # 3 dígitos = probablemente miles
+            # si no, se deja el punto como decimal
+    return float(s)
+# ============ FIN FUNCIÓN parse_numero ============
 
 
 # ============ NUEVO COMANDO /contactar ============
@@ -264,8 +300,8 @@ def recibir_cobro(ack, body, client):
     cobrador_slack = body["user"]["id"]
     fecha = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y %H:%M")
     try:
-        monto_bs_num = float(monto_bs_str.replace(".", "").replace(",", "."))
-        tasa_bcv_num = float(tasa_bcv_str.replace(".", "").replace(",", "."))
+        monto_bs_num = parse_numero(monto_bs_str)
+        tasa_bcv_num = parse_numero(tasa_bcv_str)
         monto_usd_str = f"${monto_bs_num/tasa_bcv_num:,.2f}"
         monto_bs_fmt = f"Bs. {monto_bs_num:,.2f}"
     except (ValueError, ZeroDivisionError):
@@ -480,8 +516,8 @@ def recibir_domiciliacion(ack, body, client):
     usuario_slack = body["user"]["id"]
     fecha = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y %H:%M")
     try:
-        monto_bs_num = float(monto_bs_str.replace(".", "").replace(",", "."))
-        tasa_bcv_num = float(tasa_bcv_str.replace(".", "").replace(",", "."))
+        monto_bs_num = parse_numero(monto_bs_str)
+        tasa_bcv_num = parse_numero(tasa_bcv_str)
         monto_usd_str = f"${monto_bs_num/tasa_bcv_num:,.2f}"
         monto_bs_fmt = f"Bs. {monto_bs_num:,.2f}"
     except (ValueError, ZeroDivisionError):
@@ -489,7 +525,7 @@ def recibir_domiciliacion(ack, body, client):
         monto_bs_fmt = f"Bs. {monto_bs_str}"
     # Formatear "Cuenta por cobrar" como bolívares
     try:
-        cuenta_num = float(cuenta.replace(".", "").replace(",", "."))
+        cuenta_num = parse_numero(cuenta)
         cuenta_fmt = f"Bs. {cuenta_num:,.2f}"
     except (ValueError, AttributeError):
         cuenta_fmt = f"Bs. {cuenta}"
@@ -711,8 +747,8 @@ def recibir_cobro2(ack, body, client):
     usuario_slack = body["user"]["id"]
     fecha = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y %H:%M")
     try:
-        monto_bs_num = float(monto_bs_str.replace(".", "").replace(",", "."))
-        tasa_bcv_num = float(tasa_bcv_str.replace(".", "").replace(",", "."))
+        monto_bs_num = parse_numero(monto_bs_str)
+        tasa_bcv_num = parse_numero(tasa_bcv_str)
         monto_usd_str = f"${monto_bs_num/tasa_bcv_num:,.2f}"
         monto_bs_fmt = f"Bs. {monto_bs_num:,.2f}"
     except (ValueError, ZeroDivisionError):
@@ -962,8 +998,8 @@ def recibir_conciliacion(ack, body, client):
 
     # Calcular diferencia y estado automáticamente
     try:
-        rep_num = float(monto_reportado_str.replace(".", "").replace(",", "."))
-        banco_num = float(monto_banco_str.replace(".", "").replace(",", "."))
+        rep_num = parse_numero(monto_reportado_str)
+        banco_num = parse_numero(monto_banco_str)
         diferencia_num = banco_num - rep_num
         monto_reportado_fmt = f"Bs. {rep_num:,.2f}"
         monto_banco_fmt = f"Bs. {banco_num:,.2f}"
@@ -1077,6 +1113,354 @@ def rechazar_conciliacion(ack, body, client):
     )
 # ============ FIN COMANDO /conciliar ============
 
+
+# ============ COMANDOS DE LIQUIDACIONES (Lista VIP) ============
+# Sheet aparte "Liquidaciones - Lista VIP"
+SHEET_ID_LIQUIDACIONES = "1MYKQ-CnyMQBTEZcSBIXt-KDsBbfJt-tUmG-k5aZvDI0"
+CANAL_LIQUIDACIONES = "C0BE1HLRV1R"
+
+# Lista de estatus disponibles (se usa en los dos comandos)
+ESTATUS_LIQUIDACION = [
+    "Pending",
+    "In validation",
+    "Template contract",
+    "Waiting contract",
+    "Contract in validation",
+    "Fecha primer pago",
+    "Pending deposit"
+]
+
+# Opciones de Base (se usa en el comando de nueva)
+BASES_LIQUIDACION = ["Base 1", "Base 2", "Base 3", "Base 4"]
+
+
+def _abrir_hoja_liquidaciones():
+    """Abre la hoja de Liquidaciones y devuelve (worksheet, spreadsheet)."""
+    creds_json = json.loads(os.environ["GOOGLE_CREDENTIALS"])
+    creds_json["private_key"] = creds_json["private_key"].replace("\\n", "\n")
+    creds = Credentials.from_service_account_info(
+        creds_json,
+        scopes=[
+            "https://spreadsheets.google.com/feeds",
+            "https://www.googleapis.com/auth/drive"
+        ]
+    )
+    cliente = gspread.authorize(creds)
+    spreadsheet = cliente.open_by_key(SHEET_ID_LIQUIDACIONES)
+    try:
+        sheet = spreadsheet.worksheet("Hoja1")
+    except Exception:
+        sheet = spreadsheet.sheet1
+    return sheet
+
+
+# Construye las opciones de un static_select a partir de una lista de textos
+def _opciones(lista):
+    return [{"text": {"type": "plain_text", "text": x}, "value": x} for x in lista]
+
+
+# ---------- Guardar persona nueva ----------
+# Columnas: Fecha registro, Nombre, Cédula, Cliente/Empresa, Base, Estatus, Última actualización
+def guardar_liquidacion_nueva(fecha, nombre, cedula, cliente_empresa, base, estatus):
+    try:
+        sheet = _abrir_hoja_liquidaciones()
+        sheet.append_row([fecha, nombre, cedula, cliente_empresa, base, estatus, fecha])
+        print(f"✅ Liquidación nueva guardada: {nombre} ({cedula})")
+        return True
+    except Exception as e:
+        print(f"❌ Error guardando liquidación nueva: {type(e).__name__}: {e}")
+        return False
+
+
+# ---------- Actualizar estatus por cédula ----------
+def actualizar_estatus_liquidacion(cedula, nuevo_estatus, fecha_actualizacion):
+    """Busca la cédula (columna C) y actualiza Estatus (col F) y Última actualización (col G).
+    Devuelve True si la encontró y actualizó, False si no existe."""
+    try:
+        sheet = _abrir_hoja_liquidaciones()
+        valores = sheet.get_all_values()  # lista de filas; fila 0 = encabezados
+        cedula_buscada = str(cedula).strip()
+        for i, fila in enumerate(valores):
+            if i == 0:
+                continue  # saltar encabezados
+            # Columna C (índice 2) = Cédula
+            if len(fila) > 2 and fila[2].strip() == cedula_buscada:
+                num_fila = i + 1  # gspread cuenta desde 1
+                sheet.update_cell(num_fila, 6, nuevo_estatus)        # Columna F = Estatus
+                sheet.update_cell(num_fila, 7, fecha_actualizacion)  # Columna G = Última actualización
+                print(f"✅ Estatus actualizado para cédula {cedula_buscada}: {nuevo_estatus}")
+                return True
+        print(f"⚠️ No se encontró la cédula {cedula_buscada} en Liquidaciones")
+        return False
+    except Exception as e:
+        print(f"❌ Error actualizando estatus: {type(e).__name__}: {e}")
+        return False
+
+
+# ============ COMANDO /liquidacion-nueva ============
+@app.command("/liquidacion-nueva")
+def reportar_liquidacion_nueva(ack, body, client):
+    ack()
+    client.views_open(
+        trigger_id=body["trigger_id"],
+        view={
+            "type": "modal",
+            "callback_id": "form_liquidacion_nueva",
+            "title": {"type": "plain_text", "text": "Nueva Liquidación"},
+            "submit": {"type": "plain_text", "text": "Enviar"},
+            "blocks": [
+                {
+                    "type": "input",
+                    "block_id": "nombre",
+                    "label": {"type": "plain_text", "text": "Nombre completo"},
+                    "element": {"type": "plain_text_input", "action_id": "valor"}
+                },
+                {
+                    "type": "input",
+                    "block_id": "cedula",
+                    "label": {"type": "plain_text", "text": "Cédula"},
+                    "element": {"type": "plain_text_input", "action_id": "valor"}
+                },
+                {
+                    "type": "input",
+                    "block_id": "cliente",
+                    "label": {"type": "plain_text", "text": "Cliente / Empresa"},
+                    "element": {"type": "plain_text_input", "action_id": "valor"}
+                },
+                {
+                    "type": "input",
+                    "block_id": "base",
+                    "label": {"type": "plain_text", "text": "Base"},
+                    "element": {
+                        "type": "static_select",
+                        "action_id": "valor",
+                        "placeholder": {"type": "plain_text", "text": "Selecciona"},
+                        "options": _opciones(BASES_LIQUIDACION)
+                    }
+                },
+                {
+                    "type": "input",
+                    "block_id": "estatus",
+                    "label": {"type": "plain_text", "text": "Estatus inicial"},
+                    "element": {
+                        "type": "static_select",
+                        "action_id": "valor",
+                        "placeholder": {"type": "plain_text", "text": "Selecciona"},
+                        "options": _opciones(ESTATUS_LIQUIDACION)
+                    }
+                }
+            ]
+        }
+    )
+
+
+@app.view("form_liquidacion_nueva")
+def recibir_liquidacion_nueva(ack, body, client):
+    ack()
+    valores = body["view"]["state"]["values"]
+    nombre = valores["nombre"]["valor"]["value"]
+    cedula = valores["cedula"]["valor"]["value"]
+    cliente_empresa = valores["cliente"]["valor"]["value"]
+    base = valores["base"]["valor"]["selected_option"]["value"]
+    estatus = valores["estatus"]["valor"]["selected_option"]["value"]
+    usuario_slack = body["user"]["id"]
+    fecha = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y %H:%M")
+
+    texto = (
+        f"*Nueva persona en Lista VIP* 🌟\n"
+        f"*Fecha:* {fecha}\n"
+        f"*Reportado por:* <@{usuario_slack}>\n"
+        f"*Nombre:* {nombre}\n"
+        f"*Cédula:* {cedula}\n"
+        f"*Cliente/Empresa:* {cliente_empresa}\n"
+        f"*Base:* {base}\n"
+        f"*Estatus:* {estatus}"
+    )
+    try:
+        client.chat_postMessage(
+            channel=CANAL_LIQUIDACIONES,
+            text="Nueva persona en Lista VIP",
+            metadata={
+                "event_type": "liquidacion_nueva",
+                "event_payload": {
+                    "fecha": fecha,
+                    "nombre": nombre,
+                    "cedula": cedula,
+                    "cliente": cliente_empresa,
+                    "base": base,
+                    "estatus": estatus
+                }
+            },
+            blocks=[
+                {"type": "section", "text": {"type": "mrkdwn", "text": texto}},
+                {"type": "actions", "elements": [
+                    {"type": "button", "text": {"type": "plain_text", "text": "✅ Aprobar"}, "style": "primary", "action_id": "aprobar_liquidacion_nueva"},
+                    {"type": "button", "text": {"type": "plain_text", "text": "❌ Rechazar"}, "style": "danger", "action_id": "rechazar_liquidacion_nueva"}
+                ]}
+            ]
+        )
+    except Exception as e:
+        print(f"⚠️ No se pudo enviar mensaje al canal de liquidaciones: {e}")
+
+
+@app.action("aprobar_liquidacion_nueva")
+def aprobar_liquidacion_nueva(ack, body, client):
+    ack()
+    texto_original = body["message"]["blocks"][0]["text"]["text"]
+    fecha_revision = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y %H:%M")
+    meta = body["message"].get("metadata", {}).get("event_payload", {})
+    guardado = guardar_liquidacion_nueva(
+        meta.get("fecha", fecha_revision),
+        meta.get("nombre", ""),
+        meta.get("cedula", ""),
+        meta.get("cliente", ""),
+        meta.get("base", ""),
+        meta.get("estatus", "")
+    )
+    estado = "✅ *APROBADO*" if guardado else "⚠️ *APROBADO pero hubo error guardando (revisar logs)*"
+    client.chat_update(
+        channel=body["channel"]["id"],
+        ts=body["message"]["ts"],
+        text="Liquidación APROBADA",
+        blocks=[{"type": "section", "text": {"type": "mrkdwn",
+                 "text": f"{estado} por <@{body['user']['id']}> el {fecha_revision}\n\n{texto_original}"}}]
+    )
+
+
+@app.action("rechazar_liquidacion_nueva")
+def rechazar_liquidacion_nueva(ack, body, client):
+    ack()
+    texto_original = body["message"]["blocks"][0]["text"]["text"]
+    fecha_revision = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y %H:%M")
+    client.chat_update(
+        channel=body["channel"]["id"],
+        ts=body["message"]["ts"],
+        text="Liquidación RECHAZADA",
+        blocks=[{"type": "section", "text": {"type": "mrkdwn",
+                 "text": f"❌ *RECHAZADO* por <@{body['user']['id']}> el {fecha_revision}\n\n{texto_original}"}}]
+    )
+
+
+# ============ COMANDO /liquidacion-estatus ============
+@app.command("/liquidacion-estatus")
+def reportar_liquidacion_estatus(ack, body, client):
+    ack()
+    client.views_open(
+        trigger_id=body["trigger_id"],
+        view={
+            "type": "modal",
+            "callback_id": "form_liquidacion_estatus",
+            "title": {"type": "plain_text", "text": "Cambiar Estatus"},
+            "submit": {"type": "plain_text", "text": "Enviar"},
+            "blocks": [
+                {
+                    "type": "input",
+                    "block_id": "cedula",
+                    "label": {"type": "plain_text", "text": "Cédula de la persona"},
+                    "element": {"type": "plain_text_input", "action_id": "valor"}
+                },
+                {
+                    "type": "input",
+                    "block_id": "nombre",
+                    "label": {"type": "plain_text", "text": "Nombre (referencia)"},
+                    "element": {"type": "plain_text_input", "action_id": "valor"}
+                },
+                {
+                    "type": "input",
+                    "block_id": "estatus",
+                    "label": {"type": "plain_text", "text": "Nuevo estatus"},
+                    "element": {
+                        "type": "static_select",
+                        "action_id": "valor",
+                        "placeholder": {"type": "plain_text", "text": "Selecciona"},
+                        "options": _opciones(ESTATUS_LIQUIDACION)
+                    }
+                }
+            ]
+        }
+    )
+
+
+@app.view("form_liquidacion_estatus")
+def recibir_liquidacion_estatus(ack, body, client):
+    ack()
+    valores = body["view"]["state"]["values"]
+    cedula = valores["cedula"]["valor"]["value"]
+    nombre = valores["nombre"]["valor"]["value"]
+    estatus = valores["estatus"]["valor"]["selected_option"]["value"]
+    usuario_slack = body["user"]["id"]
+    fecha = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y %H:%M")
+
+    texto = (
+        f"*Cambio de estatus solicitado* 🔄\n"
+        f"*Fecha:* {fecha}\n"
+        f"*Reportado por:* <@{usuario_slack}>\n"
+        f"*Nombre:* {nombre}\n"
+        f"*Cédula:* {cedula}\n"
+        f"*Nuevo estatus:* {estatus}"
+    )
+    try:
+        client.chat_postMessage(
+            channel=CANAL_LIQUIDACIONES,
+            text="Cambio de estatus solicitado",
+            metadata={
+                "event_type": "liquidacion_estatus",
+                "event_payload": {
+                    "fecha": fecha,
+                    "nombre": nombre,
+                    "cedula": cedula,
+                    "estatus": estatus
+                }
+            },
+            blocks=[
+                {"type": "section", "text": {"type": "mrkdwn", "text": texto}},
+                {"type": "actions", "elements": [
+                    {"type": "button", "text": {"type": "plain_text", "text": "✅ Aprobar"}, "style": "primary", "action_id": "aprobar_liquidacion_estatus"},
+                    {"type": "button", "text": {"type": "plain_text", "text": "❌ Rechazar"}, "style": "danger", "action_id": "rechazar_liquidacion_estatus"}
+                ]}
+            ]
+        )
+    except Exception as e:
+        print(f"⚠️ No se pudo enviar mensaje al canal de liquidaciones: {e}")
+
+
+@app.action("aprobar_liquidacion_estatus")
+def aprobar_liquidacion_estatus(ack, body, client):
+    ack()
+    texto_original = body["message"]["blocks"][0]["text"]["text"]
+    fecha_revision = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y %H:%M")
+    meta = body["message"].get("metadata", {}).get("event_payload", {})
+    encontrado = actualizar_estatus_liquidacion(
+        meta.get("cedula", ""),
+        meta.get("estatus", ""),
+        fecha_revision
+    )
+    if encontrado:
+        estado = f"✅ *ESTATUS ACTUALIZADO* por <@{body['user']['id']}> el {fecha_revision}"
+    else:
+        estado = f"⚠️ *NO SE ENCONTRÓ ESA CÉDULA EN LA LISTA* (revisado por <@{body['user']['id']}> el {fecha_revision}). No se actualizó nada."
+    client.chat_update(
+        channel=body["channel"]["id"],
+        ts=body["message"]["ts"],
+        text="Cambio de estatus procesado",
+        blocks=[{"type": "section", "text": {"type": "mrkdwn",
+                 "text": f"{estado}\n\n{texto_original}"}}]
+    )
+
+
+@app.action("rechazar_liquidacion_estatus")
+def rechazar_liquidacion_estatus(ack, body, client):
+    ack()
+    texto_original = body["message"]["blocks"][0]["text"]["text"]
+    fecha_revision = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y %H:%M")
+    client.chat_update(
+        channel=body["channel"]["id"],
+        ts=body["message"]["ts"],
+        text="Cambio de estatus RECHAZADO",
+        blocks=[{"type": "section", "text": {"type": "mrkdwn",
+                 "text": f"❌ *RECHAZADO* por <@{body['user']['id']}> el {fecha_revision}\n\n{texto_original}"}}]
+    )
+# ============ FIN COMANDOS DE LIQUIDACIONES ============
 
 if __name__ == "__main__":
     print("🤖 Robotín está despierto y conectándose a Slack...")
