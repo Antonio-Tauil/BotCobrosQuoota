@@ -1462,6 +1462,234 @@ def rechazar_liquidacion_estatus(ack, body, client):
     )
 # ============ FIN COMANDOS DE LIQUIDACIONES ============
 
+# ============ COMANDO /cobro-comercial (Equipo Comercial) ============
+# Sheet "Conciliacion express - comercial"
+SHEET_ID_COMERCIAL = "1Zayi6aQPoSjDadbAozhLGJaO7dU-6p51dQ5SXnaU6mc"
+CANAL_COMERCIAL = "C0BE5LJL729"
+
+
+# Función para guardar en el Sheet comercial
+# Columnas: Fecha, Nombre Cliente, Telefono, Cedula, MontoBs, FormaPago, Banco, MontoUsd, TasaBCV, Empresa
+def guardar_en_sheet_comercial(fecha, nombre, telefono, cedula, monto_bs, forma_pago, banco, monto_usd, tasa_bcv, empresa):
+    try:
+        creds_json = json.loads(os.environ["GOOGLE_CREDENTIALS"])
+        creds_json["private_key"] = creds_json["private_key"].replace("\\n", "\n")
+        creds = Credentials.from_service_account_info(
+            creds_json,
+            scopes=[
+                "https://spreadsheets.google.com/feeds",
+                "https://www.googleapis.com/auth/drive"
+            ]
+        )
+        cliente = gspread.authorize(creds)
+        spreadsheet = cliente.open_by_key(SHEET_ID_COMERCIAL)
+        try:
+            sheet = spreadsheet.worksheet("Sheet1")
+        except Exception:
+            sheet = spreadsheet.sheet1
+        sheet.append_row([fecha, nombre, telefono, cedula, monto_bs, forma_pago, banco, monto_usd, tasa_bcv, empresa])
+        print("✅ Cobro (Comercial) guardado en Google Sheets")
+    except Exception as e:
+        print(f"❌ Error guardando en sheet comercial: {type(e).__name__}: {e}")
+
+
+@app.command("/cobro-comercial")
+def reportar_cobro_comercial(ack, body, client):
+    ack()
+    client.views_open(
+        trigger_id=body["trigger_id"],
+        view={
+            "type": "modal",
+            "callback_id": "form_cobro_comercial",
+            "title": {"type": "plain_text", "text": "Cobro Comercial"},
+            "submit": {"type": "plain_text", "text": "Enviar"},
+            "blocks": [
+                {
+                    "type": "input",
+                    "block_id": "nombre",
+                    "label": {"type": "plain_text", "text": "Nombre del Cliente"},
+                    "element": {"type": "plain_text_input", "action_id": "valor"}
+                },
+                {
+                    "type": "input",
+                    "block_id": "cedula",
+                    "label": {"type": "plain_text", "text": "Cédula del Cliente"},
+                    "element": {"type": "plain_text_input", "action_id": "valor"}
+                },
+                {
+                    "type": "input",
+                    "block_id": "telefono",
+                    "label": {"type": "plain_text", "text": "Teléfono"},
+                    "element": {"type": "plain_text_input", "action_id": "valor"}
+                },
+                {
+                    "type": "input",
+                    "block_id": "monto_bs",
+                    "label": {"type": "plain_text", "text": "Monto en Bs"},
+                    "element": {"type": "plain_text_input", "action_id": "valor"}
+                },
+                {
+                    "type": "input",
+                    "block_id": "forma_pago",
+                    "label": {"type": "plain_text", "text": "Forma de Pago"},
+                    "element": {
+                        "type": "static_select",
+                        "action_id": "valor",
+                        "placeholder": {"type": "plain_text", "text": "Selecciona"},
+                        "options": [
+                            {"text": {"type": "plain_text", "text": "Pago Móvil"}, "value": "Pago Movil"},
+                            {"text": {"type": "plain_text", "text": "Transferencia"}, "value": "Transferencia"},
+                            {"text": {"type": "plain_text", "text": "Efectivo"}, "value": "Efectivo"},
+                            {"text": {"type": "plain_text", "text": "Zelle"}, "value": "Zelle"},
+                            {"text": {"type": "plain_text", "text": "Otro"}, "value": "Otro"}
+                        ]
+                    }
+                },
+                {
+                    "type": "input",
+                    "block_id": "banco",
+                    "label": {"type": "plain_text", "text": "Banco"},
+                    "element": {
+                        "type": "static_select",
+                        "action_id": "valor",
+                        "placeholder": {"type": "plain_text", "text": "Selecciona"},
+                        "options": [
+                            {"text": {"type": "plain_text", "text": "BDV - Banco de Venezuela"}, "value": "BDV"},
+                            {"text": {"type": "plain_text", "text": "BNC - Banco Nacional de Crédito"}, "value": "BNC"},
+                            {"text": {"type": "plain_text", "text": "BOD"}, "value": "BOD"},
+                            {"text": {"type": "plain_text", "text": "Mercantil"}, "value": "Mercantil"},
+                            {"text": {"type": "plain_text", "text": "Provincial"}, "value": "Provincial"},
+                            {"text": {"type": "plain_text", "text": "Bicentenario"}, "value": "Bicentenario"},
+                            {"text": {"type": "plain_text", "text": "Banesco"}, "value": "Banesco"},
+                            {"text": {"type": "plain_text", "text": "Otro"}, "value": "Otro"}
+                        ]
+                    }
+                },
+                {
+                    "type": "input",
+                    "block_id": "tasa_bcv",
+                    "label": {"type": "plain_text", "text": "Tasa BCV (Bs por USD)"},
+                    "element": {"type": "plain_text_input", "action_id": "valor"}
+                },
+                {
+                    "type": "input",
+                    "block_id": "empresa",
+                    "label": {"type": "plain_text", "text": "Empresa"},
+                    "element": {"type": "plain_text_input", "action_id": "valor"}
+                }
+            ]
+        }
+    )
+
+
+@app.view("form_cobro_comercial")
+def recibir_cobro_comercial(ack, body, client):
+    ack()
+    valores = body["view"]["state"]["values"]
+    nombre = valores["nombre"]["valor"]["value"]
+    cedula = valores["cedula"]["valor"]["value"]
+    telefono = valores["telefono"]["valor"]["value"]
+    monto_bs_str = valores["monto_bs"]["valor"]["value"]
+    forma_pago = valores["forma_pago"]["valor"]["selected_option"]["value"]
+    banco = valores["banco"]["valor"]["selected_option"]["value"]
+    tasa_bcv_str = valores["tasa_bcv"]["valor"]["value"]
+    empresa = valores["empresa"]["valor"]["value"]
+    usuario_slack = body["user"]["id"]
+    fecha = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y %H:%M")
+    try:
+        monto_bs_num = parse_numero(monto_bs_str)
+        tasa_bcv_num = parse_numero(tasa_bcv_str)
+        monto_usd_str = f"${monto_bs_num/tasa_bcv_num:,.2f}"
+        monto_bs_fmt = f"Bs. {monto_bs_num:,.2f}"
+    except (ValueError, ZeroDivisionError):
+        monto_usd_str = "(No calculable)"
+        monto_bs_fmt = f"Bs. {monto_bs_str}"
+    texto = (
+        f"*Nuevo cobro reportado (Comercial)* 🤝💰\n"
+        f"*Fecha:* {fecha}\n"
+        f"*Reportado por:* <@{usuario_slack}>\n"
+        f"*Cliente:* {nombre}\n"
+        f"*Cédula:* {cedula}\n"
+        f"*Teléfono:* {telefono}\n"
+        f"*Monto Bs:* {monto_bs_fmt}\n"
+        f"*Forma de Pago:* {forma_pago}\n"
+        f"*Banco:* {banco}\n"
+        f"*Tasa BCV:* {tasa_bcv_str}\n"
+        f"*Monto USD:* {monto_usd_str}\n"
+        f"*Empresa:* {empresa}"
+    )
+    client.chat_postMessage(
+        channel=CANAL_COMERCIAL,
+        text="Nuevo cobro reportado (Comercial)",
+        metadata={
+            "event_type": "cobro_comercial_reportado",
+            "event_payload": {
+                "fecha": fecha,
+                "nombre": nombre,
+                "telefono": telefono,
+                "cedula": cedula,
+                "monto_bs": monto_bs_fmt,
+                "forma_pago": forma_pago,
+                "banco": banco,
+                "monto_usd": monto_usd_str,
+                "tasa_bcv": tasa_bcv_str,
+                "empresa": empresa
+            }
+        },
+        blocks=[
+            {"type": "section", "text": {"type": "mrkdwn", "text": texto}},
+            {"type": "actions", "elements": [
+                {"type": "button", "text": {"type": "plain_text", "text": "✅ Aprobar"}, "style": "primary", "action_id": "aprobar_comercial"},
+                {"type": "button", "text": {"type": "plain_text", "text": "❌ Rechazar"}, "style": "danger", "action_id": "rechazar_comercial"}
+            ]}
+        ]
+    )
+
+
+@app.action("aprobar_comercial")
+def aprobar_comercial(ack, body, client):
+    ack()
+    texto_original = body["message"]["blocks"][0]["text"]["text"]
+    fecha_revision = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y %H:%M")
+    try:
+        meta = body["message"].get("metadata", {}).get("event_payload", {})
+        guardar_en_sheet_comercial(
+            meta.get("fecha", fecha_revision),
+            meta.get("nombre", ""),
+            meta.get("telefono", ""),
+            meta.get("cedula", ""),
+            meta.get("monto_bs", ""),
+            meta.get("forma_pago", ""),
+            meta.get("banco", ""),
+            meta.get("monto_usd", ""),
+            meta.get("tasa_bcv", ""),
+            meta.get("empresa", "")
+        )
+    except Exception as e:
+        print(f"Error: {e}")
+    client.chat_update(
+        channel=body["channel"]["id"],
+        ts=body["message"]["ts"],
+        text="Cobro APROBADO",
+        blocks=[{"type": "section", "text": {"type": "mrkdwn",
+                 "text": f"✅ *APROBADO* por <@{body['user']['id']}> el {fecha_revision}\n\n{texto_original}"}}]
+    )
+
+
+@app.action("rechazar_comercial")
+def rechazar_comercial(ack, body, client):
+    ack()
+    texto_original = body["message"]["blocks"][0]["text"]["text"]
+    fecha_revision = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y %H:%M")
+    client.chat_update(
+        channel=body["channel"]["id"],
+        ts=body["message"]["ts"],
+        text="Cobro RECHAZADO",
+        blocks=[{"type": "section", "text": {"type": "mrkdwn",
+                 "text": f"❌ *RECHAZADO* por <@{body['user']['id']}> el {fecha_revision}\n\n{texto_original}"}}]
+    )
+# ============ FIN COMANDO /cobro-comercial ============
+
 if __name__ == "__main__":
     print("🤖 Robotín está despierto y conectándose a Slack...")
     SocketModeHandler(app, os.environ["SLACK_APP_TOKEN"]).start()
