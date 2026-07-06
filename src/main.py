@@ -1,5 +1,4 @@
 import os
-import re
 import json
 import gspread
 from datetime import datetime
@@ -11,39 +10,32 @@ from google.oauth2.service_account import Credentials
 app = App(token=os.environ["SLACK_BOT_TOKEN"])
 
 
-# ============ FUNCIÓN PARA LEER NÚMEROS EN CUALQUIER FORMATO ============
-# Entiende: 12420  |  12420,53  |  12.420,53  |  12,420.53  |  587.4059  |  Bs. 1.500,00
-def parse_numero(texto):
-    if texto is None:
-        raise ValueError("vacío")
-    # Dejar solo dígitos, punto, coma y signo negativo (quita "Bs", "$", espacios, etc.)
-    s = re.sub(r"[^0-9.,\-]", "", str(texto).strip())
-    if s in ("", "-", ".", ","):
-        raise ValueError("sin dígitos")
-    tiene_punto = "." in s
-    tiene_coma = "," in s
-    if tiene_punto and tiene_coma:
-        # El separador que esté más a la derecha es el decimal
-        if s.rfind(",") > s.rfind("."):
-            s = s.replace(".", "").replace(",", ".")   # coma decimal (venezolano)
-        else:
-            s = s.replace(",", "")                     # punto decimal (gringo)
-    elif tiene_coma:
-        if s.count(",") > 1:
-            s = s.replace(",", "")                     # varias comas = miles
-        else:
-            _, _, dec = s.partition(",")
-            s = s.replace(",", "") if len(dec) == 3 else s.replace(",", ".")
-    elif tiene_punto:
-        if s.count(".") > 1:
-            s = s.replace(".", "")                     # varios puntos = miles
-        else:
-            _, _, dec = s.partition(".")
-            if len(dec) == 3:
-                s = s.replace(".", "")                 # 3 dígitos = probablemente miles
-            # si no, se deja el punto como decimal
-    return float(s)
-# ============ FIN FUNCIÓN parse_numero ============
+# ============ BLINDAJE ANTI-DUPLICADOS ============
+# Cada mensaje de Slack tiene un "ts" (timestamp) único e irrepetible.
+# Al aprobar, guardamos ese ts en la última columna de la hoja ("ID Registro").
+# Antes de guardar, verificamos si ese ts ya existe: si existe, NO se guarda de
+# nuevo. Esto evita que un mismo reporte aprobado quede registrado dos veces
+# (por ejemplo, por un doble clic en "Aprobar" o eventos repetidos de Slack).
+def _registro_ya_guardado(sheet, registro_id):
+    """Devuelve True si el ID del mensaje (ts) ya fue guardado en la hoja."""
+    if not registro_id:
+        return False
+    try:
+        objetivo = str(registro_id).strip()
+        for fila in sheet.get_all_values():
+            for celda in fila:
+                if str(celda).strip() == objetivo:
+                    return True
+        return False
+    except Exception as e:
+        print(f"⚠️ No se pudo verificar duplicado: {e}")
+        return False  # ante la duda, no bloquear
+
+
+def _ya_procesado(texto):
+    """True si el mensaje ya fue aprobado/rechazado/marcado (evita doble clic)."""
+    return texto.lstrip().startswith(("✅", "❌", "⚠"))
+# ============ FIN BLINDAJE ANTI-DUPLICADOS ============
 
 
 # ============ NUEVO COMANDO /contactar ============
@@ -177,7 +169,7 @@ def recibir_contacto(ack, body, client):
 
 
 # Función para guardar en Google Sheets
-def guardar_en_sheet(fecha, cobrador, descripcion, numero, cedula, monto_bs, forma_pago, banco, tasa_bcv, monto_usd):
+def guardar_en_sheet(fecha, cobrador, descripcion, numero, cedula, monto_bs, forma_pago, banco, tasa_bcv, monto_usd, registro_id=""):
     try:
         creds_json = json.loads(os.environ["GOOGLE_CREDENTIALS"])
         creds_json["private_key"] = creds_json["private_key"].replace("\\n", "\n")
@@ -190,10 +182,16 @@ def guardar_en_sheet(fecha, cobrador, descripcion, numero, cedula, monto_bs, for
         )
         cliente = gspread.authorize(creds)
         sheet = cliente.open_by_key(os.environ["SHEET_ID"]).worksheet("Pagos Recibidos")
-        sheet.append_row([fecha, descripcion, numero, cedula, monto_bs, forma_pago, banco, monto_usd, tasa_bcv, cobrador])
+        # Blindaje: no guardar dos veces el mismo mensaje
+        if _registro_ya_guardado(sheet, registro_id):
+            print("⚠️ Cobro duplicado (ya guardado), se omite.")
+            return "DUPLICADO"
+        sheet.append_row([fecha, descripcion, numero, cedula, monto_bs, forma_pago, banco, monto_usd, tasa_bcv, cobrador, registro_id])
         print("✅ Cobro guardado en Google Sheets")
+        return "OK"
     except Exception as e:
         print(f"❌ Error guardando en sheet: {e}")
+        return "ERROR"
 
 
 @app.command("/cobro")
@@ -300,8 +298,8 @@ def recibir_cobro(ack, body, client):
     cobrador_slack = body["user"]["id"]
     fecha = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y %H:%M")
     try:
-        monto_bs_num = parse_numero(monto_bs_str)
-        tasa_bcv_num = parse_numero(tasa_bcv_str)
+        monto_bs_num = float(monto_bs_str.replace(".", "").replace(",", "."))
+        tasa_bcv_num = float(tasa_bcv_str.replace(".", "").replace(",", "."))
         monto_usd_str = f"${monto_bs_num/tasa_bcv_num:,.2f}"
         monto_bs_fmt = f"Bs. {monto_bs_num:,.2f}"
     except (ValueError, ZeroDivisionError):
@@ -352,10 +350,15 @@ def recibir_cobro(ack, body, client):
 def aprobar(ack, body, client):
     ack()
     texto_original = body["message"]["blocks"][0]["text"]["text"]
+    # Blindaje: si ya fue procesado, no hacer nada (evita doble clic)
+    if _ya_procesado(texto_original):
+        return
     fecha_revision = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y %H:%M")
+    registro_id = body["message"]["ts"]  # ID único del mensaje de Slack
+    resultado = "ERROR"
     try:
         meta = body["message"].get("metadata", {}).get("event_payload", {})
-        guardar_en_sheet(
+        resultado = guardar_en_sheet(
             meta.get("fecha", fecha_revision),
             meta.get("cobrador", body["user"]["id"]),
             meta.get("descripcion", ""),
@@ -365,16 +368,21 @@ def aprobar(ack, body, client):
             meta.get("forma_pago", ""),
             meta.get("banco", ""),
             meta.get("tasa_bcv", ""),
-            meta.get("monto_usd", "")
+            meta.get("monto_usd", ""),
+            registro_id
         )
     except Exception as e:
         print(f"Error: {e}")
+    if resultado == "DUPLICADO":
+        encabezado = f"⚠️ *YA REGISTRADO* — este cobro ya estaba guardado, no se duplicó. Revisado por <@{body['user']['id']}> el {fecha_revision}"
+    else:
+        encabezado = f"✅ *APROBADO* por <@{body['user']['id']}> el {fecha_revision}"
     client.chat_update(
         channel=body["channel"]["id"],
         ts=body["message"]["ts"],
-        text="Cobro APROBADO",
+        text="Cobro procesado",
         blocks=[{"type": "section", "text": {"type": "mrkdwn",
-                 "text": f"✅ *APROBADO* por <@{body['user']['id']}> el {fecha_revision}\n\n{texto_original}"}}]
+                 "text": f"{encabezado}\n\n{texto_original}"}}]
     )
 
 
@@ -382,6 +390,8 @@ def aprobar(ack, body, client):
 def rechazar(ack, body, client):
     ack()
     texto_original = body["message"]["blocks"][0]["text"]["text"]
+    if _ya_procesado(texto_original):
+        return
     fecha_revision = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y %H:%M")
     client.chat_update(
         channel=body["channel"]["id"],
@@ -394,7 +404,7 @@ def rechazar(ack, body, client):
 
 # ============ COMANDO /domiciliar ============
 # Función para guardar en hoja "Domiciliación"
-def guardar_en_domiciliacion(fecha, empresa, cuenta, monto_bs, banco, monto_usd, tasa_bcv, cobrador):
+def guardar_en_domiciliacion(fecha, empresa, cuenta, monto_bs, banco, monto_usd, tasa_bcv, cobrador, registro_id=""):
     try:
         creds_json = json.loads(os.environ["GOOGLE_CREDENTIALS"])
         creds_json["private_key"] = creds_json["private_key"].replace("\\n", "\n")
@@ -416,11 +426,17 @@ def guardar_en_domiciliacion(fecha, empresa, cuenta, monto_bs, banco, monto_usd,
                 break
         if sheet is None:
             print(f"❌ No se encontró la hoja 'Domiciliación'. Hojas disponibles: {[ws.title for ws in spreadsheet.worksheets()]}")
-            return
-        sheet.append_row([fecha, empresa, cuenta, monto_bs, banco, monto_usd, tasa_bcv, cobrador])
+            return "ERROR"
+        # Blindaje: no guardar dos veces el mismo mensaje
+        if _registro_ya_guardado(sheet, registro_id):
+            print("⚠️ Domiciliación duplicada (ya guardada), se omite.")
+            return "DUPLICADO"
+        sheet.append_row([fecha, empresa, cuenta, monto_bs, banco, monto_usd, tasa_bcv, cobrador, registro_id])
         print(f"✅ Domiciliación guardada en hoja '{sheet.title}'")
+        return "OK"
     except Exception as e:
         print(f"❌ Error guardando en Domiciliación: {type(e).__name__}: {e}")
+        return "ERROR"
 
 
 @app.command("/domiciliar")
@@ -516,8 +532,8 @@ def recibir_domiciliacion(ack, body, client):
     usuario_slack = body["user"]["id"]
     fecha = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y %H:%M")
     try:
-        monto_bs_num = parse_numero(monto_bs_str)
-        tasa_bcv_num = parse_numero(tasa_bcv_str)
+        monto_bs_num = float(monto_bs_str.replace(".", "").replace(",", "."))
+        tasa_bcv_num = float(tasa_bcv_str.replace(".", "").replace(",", "."))
         monto_usd_str = f"${monto_bs_num/tasa_bcv_num:,.2f}"
         monto_bs_fmt = f"Bs. {monto_bs_num:,.2f}"
     except (ValueError, ZeroDivisionError):
@@ -525,7 +541,7 @@ def recibir_domiciliacion(ack, body, client):
         monto_bs_fmt = f"Bs. {monto_bs_str}"
     # Formatear "Cuenta por cobrar" como bolívares
     try:
-        cuenta_num = parse_numero(cuenta)
+        cuenta_num = float(cuenta.replace(".", "").replace(",", "."))
         cuenta_fmt = f"Bs. {cuenta_num:,.2f}"
     except (ValueError, AttributeError):
         cuenta_fmt = f"Bs. {cuenta}"
@@ -574,10 +590,14 @@ def recibir_domiciliacion(ack, body, client):
 def aprobar_domiciliacion(ack, body, client):
     ack()
     texto_original = body["message"]["blocks"][0]["text"]["text"]
+    if _ya_procesado(texto_original):
+        return
     fecha_revision = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y %H:%M")
+    registro_id = body["message"]["ts"]
+    resultado = "ERROR"
     try:
         meta = body["message"].get("metadata", {}).get("event_payload", {})
-        guardar_en_domiciliacion(
+        resultado = guardar_en_domiciliacion(
             meta.get("fecha", fecha_revision),
             meta.get("empresa", ""),
             meta.get("cuenta", ""),
@@ -585,16 +605,21 @@ def aprobar_domiciliacion(ack, body, client):
             meta.get("banco", ""),
             meta.get("monto_usd", ""),
             meta.get("tasa_bcv", ""),
-            meta.get("cobrador", "")
+            meta.get("cobrador", ""),
+            registro_id
         )
     except Exception as e:
         print(f"Error: {e}")
+    if resultado == "DUPLICADO":
+        encabezado = f"⚠️ *YA REGISTRADA* — esta domiciliación ya estaba guardada, no se duplicó. Revisado por <@{body['user']['id']}> el {fecha_revision}"
+    else:
+        encabezado = f"✅ *APROBADO* por <@{body['user']['id']}> el {fecha_revision}"
     client.chat_update(
         channel=body["channel"]["id"],
         ts=body["message"]["ts"],
-        text="Domiciliación APROBADA",
+        text="Domiciliación procesada",
         blocks=[{"type": "section", "text": {"type": "mrkdwn",
-                 "text": f"✅ *APROBADO* por <@{body['user']['id']}> el {fecha_revision}\n\n{texto_original}"}}]
+                 "text": f"{encabezado}\n\n{texto_original}"}}]
     )
 
 
@@ -602,6 +627,8 @@ def aprobar_domiciliacion(ack, body, client):
 def rechazar_domiciliacion(ack, body, client):
     ack()
     texto_original = body["message"]["blocks"][0]["text"]["text"]
+    if _ya_procesado(texto_original):
+        return
     fecha_revision = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y %H:%M")
     client.chat_update(
         channel=body["channel"]["id"],
@@ -619,7 +646,7 @@ SHEET_ID_COBRO2 = "1KbWx1d5ujGmNwjGbdb-c_QAwiEkxJpxLb1BOFOCY9QM"
 
 
 # Función para guardar en el Sheet del Call Center
-def guardar_en_sheet_cobro2(fecha, nombre, telefono, cedula, monto_bs, forma_pago, banco, monto_usd, tasa_bcv, referencia):
+def guardar_en_sheet_cobro2(fecha, nombre, telefono, cedula, monto_bs, forma_pago, banco, monto_usd, tasa_bcv, referencia, registro_id=""):
     try:
         creds_json = json.loads(os.environ["GOOGLE_CREDENTIALS"])
         creds_json["private_key"] = creds_json["private_key"].replace("\\n", "\n")
@@ -636,11 +663,17 @@ def guardar_en_sheet_cobro2(fecha, nombre, telefono, cedula, monto_bs, forma_pag
             sheet = spreadsheet.worksheet("Hoja1")
         except Exception:
             sheet = spreadsheet.sheet1
-        # Orden de columnas: Fecha, Nombre, Telefono, Cedula, MontoBs, FormaPago, Banco, MontoUsd, TasaBCV, referencia pago
-        sheet.append_row([fecha, nombre, telefono, cedula, monto_bs, forma_pago, banco, monto_usd, tasa_bcv, referencia])
+        # Blindaje: no guardar dos veces el mismo mensaje
+        if _registro_ya_guardado(sheet, registro_id):
+            print("⚠️ Cobro Call Center duplicado (ya guardado), se omite.")
+            return "DUPLICADO"
+        # Orden de columnas: Fecha, Nombre, Telefono, Cedula, MontoBs, FormaPago, Banco, MontoUsd, TasaBCV, referencia pago, ID Registro
+        sheet.append_row([fecha, nombre, telefono, cedula, monto_bs, forma_pago, banco, monto_usd, tasa_bcv, referencia, registro_id])
         print("✅ Cobro (Call Center) guardado en Google Sheets")
+        return "OK"
     except Exception as e:
         print(f"❌ Error guardando en sheet cobro2: {type(e).__name__}: {e}")
+        return "ERROR"
 
 
 @app.command("/cobro-callcenter")
@@ -747,8 +780,8 @@ def recibir_cobro2(ack, body, client):
     usuario_slack = body["user"]["id"]
     fecha = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y %H:%M")
     try:
-        monto_bs_num = parse_numero(monto_bs_str)
-        tasa_bcv_num = parse_numero(tasa_bcv_str)
+        monto_bs_num = float(monto_bs_str.replace(".", "").replace(",", "."))
+        tasa_bcv_num = float(tasa_bcv_str.replace(".", "").replace(",", "."))
         monto_usd_str = f"${monto_bs_num/tasa_bcv_num:,.2f}"
         monto_bs_fmt = f"Bs. {monto_bs_num:,.2f}"
     except (ValueError, ZeroDivisionError):
@@ -800,10 +833,14 @@ def recibir_cobro2(ack, body, client):
 def aprobar_cobro2(ack, body, client):
     ack()
     texto_original = body["message"]["blocks"][0]["text"]["text"]
+    if _ya_procesado(texto_original):
+        return
     fecha_revision = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y %H:%M")
+    registro_id = body["message"]["ts"]
+    resultado = "ERROR"
     try:
         meta = body["message"].get("metadata", {}).get("event_payload", {})
-        guardar_en_sheet_cobro2(
+        resultado = guardar_en_sheet_cobro2(
             meta.get("fecha", fecha_revision),
             meta.get("nombre", ""),
             meta.get("telefono", ""),
@@ -813,16 +850,21 @@ def aprobar_cobro2(ack, body, client):
             meta.get("banco", ""),
             meta.get("monto_usd", ""),
             meta.get("tasa_bcv", ""),
-            meta.get("referencia", "")
+            meta.get("referencia", ""),
+            registro_id
         )
     except Exception as e:
         print(f"Error: {e}")
+    if resultado == "DUPLICADO":
+        encabezado = f"⚠️ *YA REGISTRADO* — este cobro ya estaba guardado, no se duplicó. Revisado por <@{body['user']['id']}> el {fecha_revision}"
+    else:
+        encabezado = f"✅ *APROBADO* por <@{body['user']['id']}> el {fecha_revision}"
     client.chat_update(
         channel=body["channel"]["id"],
         ts=body["message"]["ts"],
-        text="Cobro APROBADO",
+        text="Cobro procesado",
         blocks=[{"type": "section", "text": {"type": "mrkdwn",
-                 "text": f"✅ *APROBADO* por <@{body['user']['id']}> el {fecha_revision}\n\n{texto_original}"}}]
+                 "text": f"{encabezado}\n\n{texto_original}"}}]
     )
 
 
@@ -830,6 +872,8 @@ def aprobar_cobro2(ack, body, client):
 def rechazar_cobro2(ack, body, client):
     ack()
     texto_original = body["message"]["blocks"][0]["text"]["text"]
+    if _ya_procesado(texto_original):
+        return
     fecha_revision = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y %H:%M")
     client.chat_update(
         channel=body["channel"]["id"],
@@ -848,7 +892,7 @@ def rechazar_cobro2(ack, body, client):
 # Función para guardar en hoja "Conciliación"
 def guardar_en_conciliacion(fecha_conciliacion, cliente_nombre, cedula, referencia, banco,
                             monto_reportado, monto_banco, diferencia, estado,
-                            fecha_movimiento, conciliador, observaciones):
+                            fecha_movimiento, conciliador, observaciones, registro_id=""):
     try:
         creds_json = json.loads(os.environ["GOOGLE_CREDENTIALS"])
         creds_json["private_key"] = creds_json["private_key"].replace("\\n", "\n")
@@ -870,15 +914,21 @@ def guardar_en_conciliacion(fecha_conciliacion, cliente_nombre, cedula, referenc
                 break
         if sheet is None:
             print(f"❌ No se encontró la hoja 'Conciliación'. Hojas disponibles: {[ws.title for ws in spreadsheet.worksheets()]}")
-            return
+            return "ERROR"
+        # Blindaje: no guardar dos veces el mismo mensaje
+        if _registro_ya_guardado(sheet, registro_id):
+            print("⚠️ Conciliación duplicada (ya guardada), se omite.")
+            return "DUPLICADO"
         sheet.append_row([
             fecha_conciliacion, cliente_nombre, cedula, referencia, banco,
             monto_reportado, monto_banco, diferencia, estado,
-            fecha_movimiento, conciliador, observaciones
+            fecha_movimiento, conciliador, observaciones, registro_id
         ])
         print(f"✅ Conciliación guardada en hoja '{sheet.title}'")
+        return "OK"
     except Exception as e:
         print(f"❌ Error guardando en Conciliación: {type(e).__name__}: {e}")
+        return "ERROR"
 
 
 @app.command("/conciliar")
@@ -998,8 +1048,8 @@ def recibir_conciliacion(ack, body, client):
 
     # Calcular diferencia y estado automáticamente
     try:
-        rep_num = parse_numero(monto_reportado_str)
-        banco_num = parse_numero(monto_banco_str)
+        rep_num = float(monto_reportado_str.replace(".", "").replace(",", "."))
+        banco_num = float(monto_banco_str.replace(".", "").replace(",", "."))
         diferencia_num = banco_num - rep_num
         monto_reportado_fmt = f"Bs. {rep_num:,.2f}"
         monto_banco_fmt = f"Bs. {banco_num:,.2f}"
@@ -1071,10 +1121,14 @@ def recibir_conciliacion(ack, body, client):
 def aprobar_conciliacion(ack, body, client):
     ack()
     texto_original = body["message"]["blocks"][0]["text"]["text"]
+    if _ya_procesado(texto_original):
+        return
     fecha_revision = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y %H:%M")
+    registro_id = body["message"]["ts"]
+    resultado = "ERROR"
     try:
         meta = body["message"].get("metadata", {}).get("event_payload", {})
-        guardar_en_conciliacion(
+        resultado = guardar_en_conciliacion(
             meta.get("fecha", fecha_revision),
             meta.get("cliente", ""),
             meta.get("cedula", ""),
@@ -1086,16 +1140,21 @@ def aprobar_conciliacion(ack, body, client):
             meta.get("estado", ""),
             meta.get("fecha_movimiento", ""),
             meta.get("conciliador", ""),
-            meta.get("observaciones", "")
+            meta.get("observaciones", ""),
+            registro_id
         )
     except Exception as e:
         print(f"Error: {e}")
+    if resultado == "DUPLICADO":
+        encabezado = f"⚠️ *YA REGISTRADA* — esta conciliación ya estaba guardada, no se duplicó. Revisado por <@{body['user']['id']}> el {fecha_revision}"
+    else:
+        encabezado = f"✅ *APROBADO* por <@{body['user']['id']}> el {fecha_revision}"
     client.chat_update(
         channel=body["channel"]["id"],
         ts=body["message"]["ts"],
-        text="Conciliación APROBADA",
+        text="Conciliación procesada",
         blocks=[{"type": "section", "text": {"type": "mrkdwn",
-                 "text": f"✅ *APROBADO* por <@{body['user']['id']}> el {fecha_revision}\n\n{texto_original}"}}]
+                 "text": f"{encabezado}\n\n{texto_original}"}}]
     )
 
 
@@ -1103,6 +1162,8 @@ def aprobar_conciliacion(ack, body, client):
 def rechazar_conciliacion(ack, body, client):
     ack()
     texto_original = body["message"]["blocks"][0]["text"]["text"]
+    if _ya_procesado(texto_original):
+        return
     fecha_revision = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y %H:%M")
     client.chat_update(
         channel=body["channel"]["id"],
@@ -1113,582 +1174,6 @@ def rechazar_conciliacion(ack, body, client):
     )
 # ============ FIN COMANDO /conciliar ============
 
-
-# ============ COMANDOS DE LIQUIDACIONES (Lista VIP) ============
-# Sheet aparte "Liquidaciones - Lista VIP"
-SHEET_ID_LIQUIDACIONES = "1MYKQ-CnyMQBTEZcSBIXt-KDsBbfJt-tUmG-k5aZvDI0"
-CANAL_LIQUIDACIONES = "C0BE1HLRV1R"
-
-# Lista de estatus disponibles (se usa en los dos comandos)
-ESTATUS_LIQUIDACION = [
-    "Pending",
-    "In validation",
-    "Template contract",
-    "Waiting contract",
-    "Contract in validation",
-    "Fecha primer pago",
-    "Pending deposit"
-]
-
-# Opciones de Base (se usa en el comando de nueva)
-BASES_LIQUIDACION = ["Base 1", "Base 2", "Base 3", "Base 4"]
-
-
-def _abrir_hoja_liquidaciones():
-    """Abre la hoja de Liquidaciones y devuelve (worksheet, spreadsheet)."""
-    creds_json = json.loads(os.environ["GOOGLE_CREDENTIALS"])
-    creds_json["private_key"] = creds_json["private_key"].replace("\\n", "\n")
-    creds = Credentials.from_service_account_info(
-        creds_json,
-        scopes=[
-            "https://spreadsheets.google.com/feeds",
-            "https://www.googleapis.com/auth/drive"
-        ]
-    )
-    cliente = gspread.authorize(creds)
-    spreadsheet = cliente.open_by_key(SHEET_ID_LIQUIDACIONES)
-    try:
-        sheet = spreadsheet.worksheet("Hoja1")
-    except Exception:
-        sheet = spreadsheet.sheet1
-    return sheet
-
-
-# Construye las opciones de un static_select a partir de una lista de textos
-def _opciones(lista):
-    return [{"text": {"type": "plain_text", "text": x}, "value": x} for x in lista]
-
-
-# ---------- Guardar persona nueva ----------
-# Columnas: Fecha registro, Nombre, Cédula, Cliente/Empresa, Base, Estatus, Última actualización
-def guardar_liquidacion_nueva(fecha, nombre, cedula, cliente_empresa, base, estatus):
-    try:
-        sheet = _abrir_hoja_liquidaciones()
-        sheet.append_row([fecha, nombre, cedula, cliente_empresa, base, estatus, fecha])
-        print(f"✅ Liquidación nueva guardada: {nombre} ({cedula})")
-        return True
-    except Exception as e:
-        print(f"❌ Error guardando liquidación nueva: {type(e).__name__}: {e}")
-        return False
-
-
-# ---------- Actualizar estatus por cédula ----------
-def actualizar_estatus_liquidacion(cedula, nuevo_estatus, fecha_actualizacion):
-    """Busca la cédula (columna C) y actualiza Estatus (col F) y Última actualización (col G).
-    Devuelve True si la encontró y actualizó, False si no existe."""
-    try:
-        sheet = _abrir_hoja_liquidaciones()
-        valores = sheet.get_all_values()  # lista de filas; fila 0 = encabezados
-        cedula_buscada = str(cedula).strip()
-        for i, fila in enumerate(valores):
-            if i == 0:
-                continue  # saltar encabezados
-            # Columna C (índice 2) = Cédula
-            if len(fila) > 2 and fila[2].strip() == cedula_buscada:
-                num_fila = i + 1  # gspread cuenta desde 1
-                sheet.update_cell(num_fila, 6, nuevo_estatus)        # Columna F = Estatus
-                sheet.update_cell(num_fila, 7, fecha_actualizacion)  # Columna G = Última actualización
-                print(f"✅ Estatus actualizado para cédula {cedula_buscada}: {nuevo_estatus}")
-                return True
-        print(f"⚠️ No se encontró la cédula {cedula_buscada} en Liquidaciones")
-        return False
-    except Exception as e:
-        print(f"❌ Error actualizando estatus: {type(e).__name__}: {e}")
-        return False
-
-
-# ============ COMANDO /liquidacion-nueva ============
-@app.command("/liquidacion-nueva")
-def reportar_liquidacion_nueva(ack, body, client):
-    ack()
-    client.views_open(
-        trigger_id=body["trigger_id"],
-        view={
-            "type": "modal",
-            "callback_id": "form_liquidacion_nueva",
-            "title": {"type": "plain_text", "text": "Nueva Liquidación"},
-            "submit": {"type": "plain_text", "text": "Enviar"},
-            "blocks": [
-                {
-                    "type": "input",
-                    "block_id": "nombre",
-                    "label": {"type": "plain_text", "text": "Nombre completo"},
-                    "element": {"type": "plain_text_input", "action_id": "valor"}
-                },
-                {
-                    "type": "input",
-                    "block_id": "cedula",
-                    "label": {"type": "plain_text", "text": "Cédula"},
-                    "element": {"type": "plain_text_input", "action_id": "valor"}
-                },
-                {
-                    "type": "input",
-                    "block_id": "cliente",
-                    "label": {"type": "plain_text", "text": "Cliente / Empresa"},
-                    "element": {"type": "plain_text_input", "action_id": "valor"}
-                },
-                {
-                    "type": "input",
-                    "block_id": "base",
-                    "label": {"type": "plain_text", "text": "Base"},
-                    "element": {
-                        "type": "static_select",
-                        "action_id": "valor",
-                        "placeholder": {"type": "plain_text", "text": "Selecciona"},
-                        "options": _opciones(BASES_LIQUIDACION)
-                    }
-                },
-                {
-                    "type": "input",
-                    "block_id": "estatus",
-                    "label": {"type": "plain_text", "text": "Estatus inicial"},
-                    "element": {
-                        "type": "static_select",
-                        "action_id": "valor",
-                        "placeholder": {"type": "plain_text", "text": "Selecciona"},
-                        "options": _opciones(ESTATUS_LIQUIDACION)
-                    }
-                }
-            ]
-        }
-    )
-
-
-@app.view("form_liquidacion_nueva")
-def recibir_liquidacion_nueva(ack, body, client):
-    ack()
-    valores = body["view"]["state"]["values"]
-    nombre = valores["nombre"]["valor"]["value"]
-    cedula = valores["cedula"]["valor"]["value"]
-    cliente_empresa = valores["cliente"]["valor"]["value"]
-    base = valores["base"]["valor"]["selected_option"]["value"]
-    estatus = valores["estatus"]["valor"]["selected_option"]["value"]
-    usuario_slack = body["user"]["id"]
-    fecha = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y %H:%M")
-
-    texto = (
-        f"*Nueva persona en Lista VIP* 🌟\n"
-        f"*Fecha:* {fecha}\n"
-        f"*Reportado por:* <@{usuario_slack}>\n"
-        f"*Nombre:* {nombre}\n"
-        f"*Cédula:* {cedula}\n"
-        f"*Cliente/Empresa:* {cliente_empresa}\n"
-        f"*Base:* {base}\n"
-        f"*Estatus:* {estatus}"
-    )
-    try:
-        client.chat_postMessage(
-            channel=CANAL_LIQUIDACIONES,
-            text="Nueva persona en Lista VIP",
-            metadata={
-                "event_type": "liquidacion_nueva",
-                "event_payload": {
-                    "fecha": fecha,
-                    "nombre": nombre,
-                    "cedula": cedula,
-                    "cliente": cliente_empresa,
-                    "base": base,
-                    "estatus": estatus
-                }
-            },
-            blocks=[
-                {"type": "section", "text": {"type": "mrkdwn", "text": texto}},
-                {"type": "actions", "elements": [
-                    {"type": "button", "text": {"type": "plain_text", "text": "✅ Aprobar"}, "style": "primary", "action_id": "aprobar_liquidacion_nueva"},
-                    {"type": "button", "text": {"type": "plain_text", "text": "❌ Rechazar"}, "style": "danger", "action_id": "rechazar_liquidacion_nueva"}
-                ]}
-            ]
-        )
-    except Exception as e:
-        print(f"⚠️ No se pudo enviar mensaje al canal de liquidaciones: {e}")
-
-
-@app.action("aprobar_liquidacion_nueva")
-def aprobar_liquidacion_nueva(ack, body, client):
-    ack()
-    texto_original = body["message"]["blocks"][0]["text"]["text"]
-    fecha_revision = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y %H:%M")
-    meta = body["message"].get("metadata", {}).get("event_payload", {})
-    guardado = guardar_liquidacion_nueva(
-        meta.get("fecha", fecha_revision),
-        meta.get("nombre", ""),
-        meta.get("cedula", ""),
-        meta.get("cliente", ""),
-        meta.get("base", ""),
-        meta.get("estatus", "")
-    )
-    estado = "✅ *APROBADO*" if guardado else "⚠️ *APROBADO pero hubo error guardando (revisar logs)*"
-    client.chat_update(
-        channel=body["channel"]["id"],
-        ts=body["message"]["ts"],
-        text="Liquidación APROBADA",
-        blocks=[{"type": "section", "text": {"type": "mrkdwn",
-                 "text": f"{estado} por <@{body['user']['id']}> el {fecha_revision}\n\n{texto_original}"}}]
-    )
-
-
-@app.action("rechazar_liquidacion_nueva")
-def rechazar_liquidacion_nueva(ack, body, client):
-    ack()
-    texto_original = body["message"]["blocks"][0]["text"]["text"]
-    fecha_revision = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y %H:%M")
-    client.chat_update(
-        channel=body["channel"]["id"],
-        ts=body["message"]["ts"],
-        text="Liquidación RECHAZADA",
-        blocks=[{"type": "section", "text": {"type": "mrkdwn",
-                 "text": f"❌ *RECHAZADO* por <@{body['user']['id']}> el {fecha_revision}\n\n{texto_original}"}}]
-    )
-
-
-# ============ COMANDO /liquidacion-estatus ============
-@app.command("/liquidacion-estatus")
-def reportar_liquidacion_estatus(ack, body, client):
-    ack()
-    client.views_open(
-        trigger_id=body["trigger_id"],
-        view={
-            "type": "modal",
-            "callback_id": "form_liquidacion_estatus",
-            "title": {"type": "plain_text", "text": "Cambiar Estatus"},
-            "submit": {"type": "plain_text", "text": "Enviar"},
-            "blocks": [
-                {
-                    "type": "input",
-                    "block_id": "cedula",
-                    "label": {"type": "plain_text", "text": "Cédula de la persona"},
-                    "element": {"type": "plain_text_input", "action_id": "valor"}
-                },
-                {
-                    "type": "input",
-                    "block_id": "nombre",
-                    "label": {"type": "plain_text", "text": "Nombre (referencia)"},
-                    "element": {"type": "plain_text_input", "action_id": "valor"}
-                },
-                {
-                    "type": "input",
-                    "block_id": "estatus",
-                    "label": {"type": "plain_text", "text": "Nuevo estatus"},
-                    "element": {
-                        "type": "static_select",
-                        "action_id": "valor",
-                        "placeholder": {"type": "plain_text", "text": "Selecciona"},
-                        "options": _opciones(ESTATUS_LIQUIDACION)
-                    }
-                }
-            ]
-        }
-    )
-
-
-@app.view("form_liquidacion_estatus")
-def recibir_liquidacion_estatus(ack, body, client):
-    ack()
-    valores = body["view"]["state"]["values"]
-    cedula = valores["cedula"]["valor"]["value"]
-    nombre = valores["nombre"]["valor"]["value"]
-    estatus = valores["estatus"]["valor"]["selected_option"]["value"]
-    usuario_slack = body["user"]["id"]
-    fecha = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y %H:%M")
-
-    texto = (
-        f"*Cambio de estatus solicitado* 🔄\n"
-        f"*Fecha:* {fecha}\n"
-        f"*Reportado por:* <@{usuario_slack}>\n"
-        f"*Nombre:* {nombre}\n"
-        f"*Cédula:* {cedula}\n"
-        f"*Nuevo estatus:* {estatus}"
-    )
-    try:
-        client.chat_postMessage(
-            channel=CANAL_LIQUIDACIONES,
-            text="Cambio de estatus solicitado",
-            metadata={
-                "event_type": "liquidacion_estatus",
-                "event_payload": {
-                    "fecha": fecha,
-                    "nombre": nombre,
-                    "cedula": cedula,
-                    "estatus": estatus
-                }
-            },
-            blocks=[
-                {"type": "section", "text": {"type": "mrkdwn", "text": texto}},
-                {"type": "actions", "elements": [
-                    {"type": "button", "text": {"type": "plain_text", "text": "✅ Aprobar"}, "style": "primary", "action_id": "aprobar_liquidacion_estatus"},
-                    {"type": "button", "text": {"type": "plain_text", "text": "❌ Rechazar"}, "style": "danger", "action_id": "rechazar_liquidacion_estatus"}
-                ]}
-            ]
-        )
-    except Exception as e:
-        print(f"⚠️ No se pudo enviar mensaje al canal de liquidaciones: {e}")
-
-
-@app.action("aprobar_liquidacion_estatus")
-def aprobar_liquidacion_estatus(ack, body, client):
-    ack()
-    texto_original = body["message"]["blocks"][0]["text"]["text"]
-    fecha_revision = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y %H:%M")
-    meta = body["message"].get("metadata", {}).get("event_payload", {})
-    encontrado = actualizar_estatus_liquidacion(
-        meta.get("cedula", ""),
-        meta.get("estatus", ""),
-        fecha_revision
-    )
-    if encontrado:
-        estado = f"✅ *ESTATUS ACTUALIZADO* por <@{body['user']['id']}> el {fecha_revision}"
-    else:
-        estado = f"⚠️ *NO SE ENCONTRÓ ESA CÉDULA EN LA LISTA* (revisado por <@{body['user']['id']}> el {fecha_revision}). No se actualizó nada."
-    client.chat_update(
-        channel=body["channel"]["id"],
-        ts=body["message"]["ts"],
-        text="Cambio de estatus procesado",
-        blocks=[{"type": "section", "text": {"type": "mrkdwn",
-                 "text": f"{estado}\n\n{texto_original}"}}]
-    )
-
-
-@app.action("rechazar_liquidacion_estatus")
-def rechazar_liquidacion_estatus(ack, body, client):
-    ack()
-    texto_original = body["message"]["blocks"][0]["text"]["text"]
-    fecha_revision = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y %H:%M")
-    client.chat_update(
-        channel=body["channel"]["id"],
-        ts=body["message"]["ts"],
-        text="Cambio de estatus RECHAZADO",
-        blocks=[{"type": "section", "text": {"type": "mrkdwn",
-                 "text": f"❌ *RECHAZADO* por <@{body['user']['id']}> el {fecha_revision}\n\n{texto_original}"}}]
-    )
-# ============ FIN COMANDOS DE LIQUIDACIONES ============
-
-# ============ COMANDO /cobro-comercial (Equipo Comercial) ============
-# Sheet "Conciliacion express - comercial"
-SHEET_ID_COMERCIAL = "1Zayi6aQPoSjDadbAozhLGJaO7dU-6p51dQ5SXnaU6mc"
-CANAL_COMERCIAL = "C0BE5LJL729"
-
-
-# Función para guardar en el Sheet comercial
-# Columnas: Fecha, Nombre Cliente, Telefono, Cedula, MontoBs, FormaPago, Banco, MontoUsd, TasaBCV, Empresa
-def guardar_en_sheet_comercial(fecha, nombre, telefono, cedula, monto_bs, forma_pago, banco, monto_usd, tasa_bcv, empresa):
-    try:
-        creds_json = json.loads(os.environ["GOOGLE_CREDENTIALS"])
-        creds_json["private_key"] = creds_json["private_key"].replace("\\n", "\n")
-        creds = Credentials.from_service_account_info(
-            creds_json,
-            scopes=[
-                "https://spreadsheets.google.com/feeds",
-                "https://www.googleapis.com/auth/drive"
-            ]
-        )
-        cliente = gspread.authorize(creds)
-        spreadsheet = cliente.open_by_key(SHEET_ID_COMERCIAL)
-        try:
-            sheet = spreadsheet.worksheet("Sheet1")
-        except Exception:
-            sheet = spreadsheet.sheet1
-        sheet.append_row([fecha, nombre, telefono, cedula, monto_bs, forma_pago, banco, monto_usd, tasa_bcv, empresa])
-        print("✅ Cobro (Comercial) guardado en Google Sheets")
-    except Exception as e:
-        print(f"❌ Error guardando en sheet comercial: {type(e).__name__}: {e}")
-
-
-@app.command("/cobro-comercial")
-def reportar_cobro_comercial(ack, body, client):
-    ack()
-    client.views_open(
-        trigger_id=body["trigger_id"],
-        view={
-            "type": "modal",
-            "callback_id": "form_cobro_comercial",
-            "title": {"type": "plain_text", "text": "Cobro Comercial"},
-            "submit": {"type": "plain_text", "text": "Enviar"},
-            "blocks": [
-                {
-                    "type": "input",
-                    "block_id": "nombre",
-                    "label": {"type": "plain_text", "text": "Nombre del Cliente"},
-                    "element": {"type": "plain_text_input", "action_id": "valor"}
-                },
-                {
-                    "type": "input",
-                    "block_id": "cedula",
-                    "label": {"type": "plain_text", "text": "Cédula del Cliente"},
-                    "element": {"type": "plain_text_input", "action_id": "valor"}
-                },
-                {
-                    "type": "input",
-                    "block_id": "telefono",
-                    "label": {"type": "plain_text", "text": "Teléfono"},
-                    "element": {"type": "plain_text_input", "action_id": "valor"}
-                },
-                {
-                    "type": "input",
-                    "block_id": "monto_bs",
-                    "label": {"type": "plain_text", "text": "Monto en Bs"},
-                    "element": {"type": "plain_text_input", "action_id": "valor"}
-                },
-                {
-                    "type": "input",
-                    "block_id": "forma_pago",
-                    "label": {"type": "plain_text", "text": "Forma de Pago"},
-                    "element": {
-                        "type": "static_select",
-                        "action_id": "valor",
-                        "placeholder": {"type": "plain_text", "text": "Selecciona"},
-                        "options": [
-                            {"text": {"type": "plain_text", "text": "Pago Móvil"}, "value": "Pago Movil"},
-                            {"text": {"type": "plain_text", "text": "Transferencia"}, "value": "Transferencia"},
-                            {"text": {"type": "plain_text", "text": "Efectivo"}, "value": "Efectivo"},
-                            {"text": {"type": "plain_text", "text": "Zelle"}, "value": "Zelle"},
-                            {"text": {"type": "plain_text", "text": "Otro"}, "value": "Otro"}
-                        ]
-                    }
-                },
-                {
-                    "type": "input",
-                    "block_id": "banco",
-                    "label": {"type": "plain_text", "text": "Banco"},
-                    "element": {
-                        "type": "static_select",
-                        "action_id": "valor",
-                        "placeholder": {"type": "plain_text", "text": "Selecciona"},
-                        "options": [
-                            {"text": {"type": "plain_text", "text": "BDV - Banco de Venezuela"}, "value": "BDV"},
-                            {"text": {"type": "plain_text", "text": "BNC - Banco Nacional de Crédito"}, "value": "BNC"},
-                            {"text": {"type": "plain_text", "text": "BOD"}, "value": "BOD"},
-                            {"text": {"type": "plain_text", "text": "Mercantil"}, "value": "Mercantil"},
-                            {"text": {"type": "plain_text", "text": "Provincial"}, "value": "Provincial"},
-                            {"text": {"type": "plain_text", "text": "Bicentenario"}, "value": "Bicentenario"},
-                            {"text": {"type": "plain_text", "text": "Banesco"}, "value": "Banesco"},
-                            {"text": {"type": "plain_text", "text": "Otro"}, "value": "Otro"}
-                        ]
-                    }
-                },
-                {
-                    "type": "input",
-                    "block_id": "tasa_bcv",
-                    "label": {"type": "plain_text", "text": "Tasa BCV (Bs por USD)"},
-                    "element": {"type": "plain_text_input", "action_id": "valor"}
-                },
-                {
-                    "type": "input",
-                    "block_id": "empresa",
-                    "label": {"type": "plain_text", "text": "Empresa"},
-                    "element": {"type": "plain_text_input", "action_id": "valor"}
-                }
-            ]
-        }
-    )
-
-
-@app.view("form_cobro_comercial")
-def recibir_cobro_comercial(ack, body, client):
-    ack()
-    valores = body["view"]["state"]["values"]
-    nombre = valores["nombre"]["valor"]["value"]
-    cedula = valores["cedula"]["valor"]["value"]
-    telefono = valores["telefono"]["valor"]["value"]
-    monto_bs_str = valores["monto_bs"]["valor"]["value"]
-    forma_pago = valores["forma_pago"]["valor"]["selected_option"]["value"]
-    banco = valores["banco"]["valor"]["selected_option"]["value"]
-    tasa_bcv_str = valores["tasa_bcv"]["valor"]["value"]
-    empresa = valores["empresa"]["valor"]["value"]
-    usuario_slack = body["user"]["id"]
-    fecha = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y %H:%M")
-    try:
-        monto_bs_num = parse_numero(monto_bs_str)
-        tasa_bcv_num = parse_numero(tasa_bcv_str)
-        monto_usd_str = f"${monto_bs_num/tasa_bcv_num:,.2f}"
-        monto_bs_fmt = f"Bs. {monto_bs_num:,.2f}"
-    except (ValueError, ZeroDivisionError):
-        monto_usd_str = "(No calculable)"
-        monto_bs_fmt = f"Bs. {monto_bs_str}"
-    texto = (
-        f"*Nuevo cobro reportado (Comercial)* 🤝💰\n"
-        f"*Fecha:* {fecha}\n"
-        f"*Reportado por:* <@{usuario_slack}>\n"
-        f"*Cliente:* {nombre}\n"
-        f"*Cédula:* {cedula}\n"
-        f"*Teléfono:* {telefono}\n"
-        f"*Monto Bs:* {monto_bs_fmt}\n"
-        f"*Forma de Pago:* {forma_pago}\n"
-        f"*Banco:* {banco}\n"
-        f"*Tasa BCV:* {tasa_bcv_str}\n"
-        f"*Monto USD:* {monto_usd_str}\n"
-        f"*Empresa:* {empresa}"
-    )
-    client.chat_postMessage(
-        channel=CANAL_COMERCIAL,
-        text="Nuevo cobro reportado (Comercial)",
-        metadata={
-            "event_type": "cobro_comercial_reportado",
-            "event_payload": {
-                "fecha": fecha,
-                "nombre": nombre,
-                "telefono": telefono,
-                "cedula": cedula,
-                "monto_bs": monto_bs_fmt,
-                "forma_pago": forma_pago,
-                "banco": banco,
-                "monto_usd": monto_usd_str,
-                "tasa_bcv": tasa_bcv_str,
-                "empresa": empresa
-            }
-        },
-        blocks=[
-            {"type": "section", "text": {"type": "mrkdwn", "text": texto}},
-            {"type": "actions", "elements": [
-                {"type": "button", "text": {"type": "plain_text", "text": "✅ Aprobar"}, "style": "primary", "action_id": "aprobar_comercial"},
-                {"type": "button", "text": {"type": "plain_text", "text": "❌ Rechazar"}, "style": "danger", "action_id": "rechazar_comercial"}
-            ]}
-        ]
-    )
-
-
-@app.action("aprobar_comercial")
-def aprobar_comercial(ack, body, client):
-    ack()
-    texto_original = body["message"]["blocks"][0]["text"]["text"]
-    fecha_revision = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y %H:%M")
-    try:
-        meta = body["message"].get("metadata", {}).get("event_payload", {})
-        guardar_en_sheet_comercial(
-            meta.get("fecha", fecha_revision),
-            meta.get("nombre", ""),
-            meta.get("telefono", ""),
-            meta.get("cedula", ""),
-            meta.get("monto_bs", ""),
-            meta.get("forma_pago", ""),
-            meta.get("banco", ""),
-            meta.get("monto_usd", ""),
-            meta.get("tasa_bcv", ""),
-            meta.get("empresa", "")
-        )
-    except Exception as e:
-        print(f"Error: {e}")
-    client.chat_update(
-        channel=body["channel"]["id"],
-        ts=body["message"]["ts"],
-        text="Cobro APROBADO",
-        blocks=[{"type": "section", "text": {"type": "mrkdwn",
-                 "text": f"✅ *APROBADO* por <@{body['user']['id']}> el {fecha_revision}\n\n{texto_original}"}}]
-    )
-
-
-@app.action("rechazar_comercial")
-def rechazar_comercial(ack, body, client):
-    ack()
-    texto_original = body["message"]["blocks"][0]["text"]["text"]
-    fecha_revision = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y %H:%M")
-    client.chat_update(
-        channel=body["channel"]["id"],
-        ts=body["message"]["ts"],
-        text="Cobro RECHAZADO",
-        blocks=[{"type": "section", "text": {"type": "mrkdwn",
-                 "text": f"❌ *RECHAZADO* por <@{body['user']['id']}> el {fecha_revision}\n\n{texto_original}"}}]
-    )
-# ============ FIN COMANDO /cobro-comercial ============
 
 if __name__ == "__main__":
     print("🤖 Robotín está despierto y conectándose a Slack...")
