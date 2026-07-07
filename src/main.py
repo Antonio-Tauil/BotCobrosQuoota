@@ -11,22 +11,40 @@ app = App(token=os.environ["SLACK_BOT_TOKEN"])
 
 
 # ============ BLINDAJE ANTI-DUPLICADOS ============
-# Cada mensaje de Slack tiene un "ts" (timestamp) único e irrepetible.
-# Al aprobar, guardamos ese ts en la última columna de la hoja ("ID Registro").
-# Antes de guardar, verificamos si ese ts ya existe: si existe, NO se guarda de
-# nuevo. Esto evita que un mismo reporte aprobado quede registrado dos veces
-# (por ejemplo, por un doble clic en "Aprobar" o eventos repetidos de Slack).
+# Cada mensaje de Slack tiene un "ts" (timestamp) único e irrepetible. A partir
+# de ese ts generamos un ID legible (ej: CONC-20260706-172021-690559) que se
+# guarda en la columna "ID Registro". Antes de guardar, verificamos si ese ID ya
+# existe en esa columna: si existe, NO se guarda de nuevo. Esto evita que un
+# mismo reporte aprobado quede registrado dos veces (doble clic en "Aprobar" o
+# eventos repetidos de Slack). Como el ID lleva letras, Google Sheets nunca lo
+# convierte en número, así que la comparación siempre es exacta.
+def _id_amigable(prefijo, ts):
+    """Convierte el ts del mensaje en un ID legible y único.
+    Ej: _id_amigable('CONC', '1783394421.690559') -> 'CONC-20260706-172021-690559'"""
+    try:
+        dt = datetime.fromtimestamp(float(ts), ZoneInfo("America/Caracas"))
+        frac = str(ts).split(".")[-1]  # microsegundos: garantiza unicidad
+        return f"{prefijo}-{dt.strftime('%Y%m%d-%H%M%S')}-{frac}"
+    except Exception:
+        return f"{prefijo}-{ts}"
+
+
 def _registro_ya_guardado(sheet, registro_id):
-    """Devuelve True si el ID del mensaje (ts) ya fue guardado en la hoja."""
+    """Devuelve True si el ID ya está en la columna 'ID Registro' de la hoja.
+    Si no existe ese encabezado, busca en toda la hoja (respaldo)."""
     if not registro_id:
         return False
+    objetivo = str(registro_id).strip()
     try:
-        objetivo = str(registro_id).strip()
-        for fila in sheet.get_all_values():
-            for celda in fila:
-                if str(celda).strip() == objetivo:
-                    return True
-        return False
+        valores = sheet.get_all_values()
+        if not valores:
+            return False
+        encabezados = [c.strip().lower() for c in valores[0]]
+        if "id registro" in encabezados:
+            col = encabezados.index("id registro")
+            return any(len(fila) > col and str(fila[col]).strip() == objetivo for fila in valores[1:])
+        # Respaldo: si no existe el encabezado "ID Registro", buscar en toda la hoja
+        return any(str(celda).strip() == objetivo for fila in valores for celda in fila)
     except Exception as e:
         print(f"⚠️ No se pudo verificar duplicado: {e}")
         return False  # ante la duda, no bloquear
@@ -354,7 +372,7 @@ def aprobar(ack, body, client):
     if _ya_procesado(texto_original):
         return
     fecha_revision = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y %H:%M")
-    registro_id = body["message"]["ts"]  # ID único del mensaje de Slack
+    registro_id = _id_amigable("COBRO", body["message"]["ts"])  # ID legible y único
     resultado = "ERROR"
     try:
         meta = body["message"].get("metadata", {}).get("event_payload", {})
@@ -593,7 +611,7 @@ def aprobar_domiciliacion(ack, body, client):
     if _ya_procesado(texto_original):
         return
     fecha_revision = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y %H:%M")
-    registro_id = body["message"]["ts"]
+    registro_id = _id_amigable("DOMIC", body["message"]["ts"])
     resultado = "ERROR"
     try:
         meta = body["message"].get("metadata", {}).get("event_payload", {})
@@ -836,7 +854,7 @@ def aprobar_cobro2(ack, body, client):
     if _ya_procesado(texto_original):
         return
     fecha_revision = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y %H:%M")
-    registro_id = body["message"]["ts"]
+    registro_id = _id_amigable("CALLCENTER", body["message"]["ts"])
     resultado = "ERROR"
     try:
         meta = body["message"].get("metadata", {}).get("event_payload", {})
@@ -1124,7 +1142,7 @@ def aprobar_conciliacion(ack, body, client):
     if _ya_procesado(texto_original):
         return
     fecha_revision = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y %H:%M")
-    registro_id = body["message"]["ts"]
+    registro_id = _id_amigable("CONC", body["message"]["ts"])
     resultado = "ERROR"
     try:
         meta = body["message"].get("metadata", {}).get("event_payload", {})
