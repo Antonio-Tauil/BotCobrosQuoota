@@ -137,7 +137,9 @@ def reportar_contacto(ack, body, client):
                             {"text": {"type": "plain_text", "text": "LUISMAR"}, "value": "LUISMAR"},
                             {"text": {"type": "plain_text", "text": "ANGELY"}, "value": "ANGELY"},
                             {"text": {"type": "plain_text", "text": "DANIEL"}, "value": "DANIEL"},
-                            {"text": {"type": "plain_text", "text": "BARBARA"}, "value": "BARBARA"}
+                            {"text": {"type": "plain_text", "text": "BARBARA"}, "value": "BARBARA"},
+                            {"text": {"type": "plain_text", "text": "MARIANA"}, "value": "MARIANA"},
+                            {"text": {"type": "plain_text", "text": "ANDRES"}, "value": "ANDRES"}
                         ]
                     }
                 },
@@ -528,7 +530,9 @@ def reportar_domiciliacion(ack, body, client):
                             {"text": {"type": "plain_text", "text": "LUISMAR"}, "value": "LUISMAR"},
                             {"text": {"type": "plain_text", "text": "ANGELY"}, "value": "ANGELY"},
                             {"text": {"type": "plain_text", "text": "DANIEL"}, "value": "DANIEL"},
-                            {"text": {"type": "plain_text", "text": "BARBARA"}, "value": "BARBARA"}
+                            {"text": {"type": "plain_text", "text": "BARBARA"}, "value": "BARBARA"},
+                            {"text": {"type": "plain_text", "text": "MARIANA"}, "value": "MARIANA"},
+                            {"text": {"type": "plain_text", "text": "ANDRES"}, "value": "ANDRES"}
                         ]
                     }
                 }
@@ -1032,7 +1036,9 @@ def reportar_conciliacion(ack, body, client):
                             {"text": {"type": "plain_text", "text": "LUISMAR"}, "value": "LUISMAR"},
                             {"text": {"type": "plain_text", "text": "ANGELY"}, "value": "ANGELY"},
                             {"text": {"type": "plain_text", "text": "DANIEL"}, "value": "DANIEL"},
-                            {"text": {"type": "plain_text", "text": "BARBARA"}, "value": "BARBARA"}
+                            {"text": {"type": "plain_text", "text": "BARBARA"}, "value": "BARBARA"},
+                            {"text": {"type": "plain_text", "text": "MARIANA"}, "value": "MARIANA"},
+                            {"text": {"type": "plain_text", "text": "ANDRES"}, "value": "ANDRES"}
                         ]
                     }
                 },
