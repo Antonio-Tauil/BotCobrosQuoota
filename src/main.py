@@ -1433,7 +1433,10 @@ def reportar_contacto_legal(ack, body, client):
                  "label": {"type": "plain_text", "text": "Cobrador"},
                  "element": {"type": "static_select", "action_id": "valor",
                              "placeholder": {"type": "plain_text", "text": "Selecciona"},
-                             "options": _opciones_cobradores()}},
+                             "options": [
+                                 {"text": {"type": "plain_text", "text": "Maria"}, "value": "Maria"},
+                                 {"text": {"type": "plain_text", "text": "Gabriela"}, "value": "Gabriela"}
+                             ]}},
                 {"type": "input", "block_id": "comentario",
                  "label": {"type": "plain_text", "text": "Comentario"},
                  "element": {"type": "plain_text_input", "action_id": "valor", "multiline": True}}
