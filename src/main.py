@@ -2,11 +2,12 @@ import os
 import re
 import json
 import gspread
-from datetime import datetime
+from datetime import datetime, date, timedelta
 from zoneinfo import ZoneInfo
 from slack_bolt import App
 from slack_bolt.adapter.socket_mode import SocketModeHandler
 from google.oauth2.service_account import Credentials
+from apscheduler.schedulers.background import BackgroundScheduler
 
 app = App(token=os.environ["SLACK_BOT_TOKEN"])
 
@@ -1581,6 +1582,152 @@ def listar_ids(ack, body, client):
         )
 # ============ FIN COMANDO /listar-ids ============
 
+# ============ RADAR DE PROMESAS DE PAGO (Fase 1) ============
+CANAL_SEGUIMIENTO = "C0BJWPMA3NF"
+SUPERVISOR_ID = "U0B51AREWDU"  # Leandro Quoota
+
+# Tabla nombre del cobrador (como aparece en el Sheet) -> ID(s) de Slack
+COBRADOR_SLACK_IDS = {
+    "DIEGO": ["U0B3BAA8Y01", "U0B68124C9E"],
+    "IARA": ["U0B58192UJH"],
+    "REBECA": ["U0B59P76H8U"],
+    "MARIANGEL": ["U0B4QM8D3PH"],
+    "LUISMAR": ["U0BA6BWJWBF"],
+    "ANGELY": ["U0BA8AHVA3Z"],
+    "DANIEL": ["U0BAH6AFMA7"],
+    "MARIANA": ["U0BHUF23EQY"],
+    "ANDRES": ["U0BH22WRTQR"],
+    # BARBARA aún sin ID: se muestra en texto
+}
+
+
+def _mencion_cobrador(nombre):
+    """Devuelve la mención @ del cobrador; si no hay ID, devuelve el nombre en texto."""
+    clave = str(nombre).strip().upper()
+    ids = COBRADOR_SLACK_IDS.get(clave)
+    if ids:
+        return " ".join(f"<@{uid}>" for uid in ids)
+    return f"*{nombre}*"
+
+
+def _parsear_fecha(texto):
+    """Convierte 'DD/MM/YYYY' o 'DD/MM/YY' a un objeto date. None si no se puede."""
+    if not texto:
+        return None
+    t = str(texto).strip()
+    for fmt in ("%d/%m/%Y", "%d/%m/%y", "%d-%m-%Y", "%d-%m-%y"):
+        try:
+            return datetime.strptime(t, fmt).date()
+        except ValueError:
+            continue
+    return None
+
+
+def generar_resumen_promesas():
+    """Lee la hoja 'Contactados', arma el resumen de promesas de hoy + vencidas y lo publica."""
+    try:
+        creds_json = json.loads(os.environ["GOOGLE_CREDENTIALS"])
+        creds_json["private_key"] = creds_json["private_key"].replace("\\n", "\n")
+        creds = Credentials.from_service_account_info(
+            creds_json,
+            scopes=["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+        )
+        cliente = gspread.authorize(creds)
+        spreadsheet = cliente.open_by_key(os.environ["SHEET_ID"])
+        sheet = None
+        for ws in spreadsheet.worksheets():
+            if ws.title.strip().lower() == "contactados":
+                sheet = ws
+                break
+        if sheet is None:
+            print("❌ Radar: no se encontró la hoja 'Contactados'")
+            return
+
+        valores = sheet.get_all_values()
+        hoy = datetime.now(ZoneInfo("America/Caracas")).date()
+        hoy_txt = hoy.strftime("%d/%m/%Y")
+
+        de_hoy = []
+        vencidas = []
+        # Columnas (0-based): A=0 Fecha, B=1 Nombre, C=2 Telefono, D=3 Cedula,
+        # E=4 Compromiso, F=5 Cobrador, G=6 Comentario, H=7 Estado promesa, I=8 Fecha resultado
+        for i, fila in enumerate(valores):
+            if i == 0:
+                continue  # encabezados
+            def celda(idx):
+                return fila[idx].strip() if len(fila) > idx else ""
+            nombre = celda(1)
+            cedula = celda(3)
+            compromiso = celda(4)
+            cobrador = celda(5)
+            estado = celda(7)
+            if estado:  # ya tiene resultado (Cumplida/Fallida) -> se ignora
+                continue
+            fecha_prom = _parsear_fecha(compromiso)
+            if fecha_prom is None:
+                continue  # sin fecha válida, no entra al radar
+            item = {"nombre": nombre or "(sin nombre)", "cedula": cedula,
+                    "cobrador": cobrador, "fecha": fecha_prom}
+            if fecha_prom == hoy:
+                de_hoy.append(item)
+            elif fecha_prom < hoy:
+                vencidas.append(item)
+
+        # Ordenar vencidas de la más antigua a la más reciente
+        vencidas.sort(key=lambda x: x["fecha"])
+
+        # Armar el mensaje
+        lineas = [f"📅 *Radar de Promesas de Pago — {hoy_txt}*", ""]
+
+        if de_hoy:
+            lineas.append(f"☀️ *Promesas para HOY ({len(de_hoy)}):*")
+            for it in de_hoy:
+                ced = f" ({it['cedula']})" if it["cedula"] else ""
+                lineas.append(f"• {it['nombre']}{ced} — {_mencion_cobrador(it['cobrador'])}")
+            lineas.append("")
+
+        if vencidas:
+            lineas.append(f"⏰ *VENCIDAS sin marcar ({len(vencidas)}):*")
+            for it in vencidas:
+                ced = f" ({it['cedula']})" if it["cedula"] else ""
+                dias = (hoy - it["fecha"]).days
+                venc = it["fecha"].strftime("%d/%m/%Y")
+                alerta = " 🔴" if dias >= 3 else ""
+                lineas.append(f"• {it['nombre']}{ced} — venció {venc} ({dias}d){alerta} — {_mencion_cobrador(it['cobrador'])}")
+            lineas.append("")
+            # Escalamiento: si hay vencidas de 3+ días, avisar al supervisor
+            muy_vencidas = [v for v in vencidas if (hoy - v["fecha"]).days >= 3]
+            if muy_vencidas:
+                lineas.append(f"🔴 <@{SUPERVISOR_ID}> hay {len(muy_vencidas)} promesa(s) vencida(s) 3+ días sin marcar.")
+                lineas.append("")
+
+        if not de_hoy and not vencidas:
+            lineas.append("✅ No hay promesas pendientes para hoy ni vencidas. ¡Todo al día!")
+
+        mensaje = "\n".join(lineas).strip()
+        app.client.chat_postMessage(channel=CANAL_SEGUIMIENTO, text=mensaje)
+        print(f"✅ Radar publicado: {len(de_hoy)} de hoy, {len(vencidas)} vencidas")
+    except Exception as e:
+        print(f"❌ Error generando el resumen de promesas: {type(e).__name__}: {e}")
+
+
+# Comando manual para PROBAR el radar sin esperar a las 4 PM
+@app.command("/probar-radar")
+def probar_radar(ack, body, client):
+    ack()
+    client.chat_postEphemeral(
+        channel=body["channel_id"], user=body["user_id"],
+        text="⏳ Generando el radar de promesas ahora mismo... revisa el canal #cobranzas-seguimiento."
+    )
+    generar_resumen_promesas()
+# ============ FIN RADAR DE PROMESAS ============
+
+
 if __name__ == "__main__":
     print("🤖 Robotín está despierto y conectándose a Slack...")
+    # Programar el Radar de Promesas todos los días a las 4:00 PM (hora Venezuela)
+    scheduler = BackgroundScheduler(timezone=ZoneInfo("America/Caracas"))
+    scheduler.add_job(generar_resumen_promesas, "cron", hour=16, minute=0)
+    scheduler.start()
+    print("⏰ Scheduler del Radar de Promesas activo (4:00 PM Venezuela).")
     SocketModeHandler(app, os.environ["SLACK_APP_TOKEN"]).start()
