@@ -1613,7 +1613,7 @@ def guardar_cliente_escalado(fecha, nombre, telefono, cedula, empresa, incidenci
         print(f"❌ Error guardando en Clientes escalados: {type(e).__name__}: {e}")
 
 
-@app.command("/cliente-escalado")
+@app.command("/clientes-escalados")
 def reportar_cliente_escalado(ack, body, client):
     ack()
     client.views_open(
