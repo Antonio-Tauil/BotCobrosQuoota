@@ -1582,6 +1582,103 @@ def listar_ids(ack, body, client):
         )
 # ============ FIN COMANDO /listar-ids ============
 
+
+# ============ COMANDO /cliente-escalado (Clientes Escalados) ============
+SHEET_ID_ESCALADOS = "1Zayi6aQPoSjDadbAozhLGJaO7dU-6p51dQ5SXnaU6mc"
+CANAL_ESCALADOS = "C0BK1FFH5M3"
+
+
+# Columnas: Fecha, Nombre del cliente, Teléfono, Cédula, Empresa, Incidencia, Reportada por
+def guardar_cliente_escalado(fecha, nombre, telefono, cedula, empresa, incidencia, reportada_por):
+    try:
+        creds_json = json.loads(os.environ["GOOGLE_CREDENTIALS"])
+        creds_json["private_key"] = creds_json["private_key"].replace("\\n", "\n")
+        creds = Credentials.from_service_account_info(
+            creds_json,
+            scopes=["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+        )
+        cliente = gspread.authorize(creds)
+        spreadsheet = cliente.open_by_key(SHEET_ID_ESCALADOS)
+        sheet = None
+        for ws in spreadsheet.worksheets():
+            if ws.title.strip().lower() == "clientes escalados":
+                sheet = ws
+                break
+        if sheet is None:
+            print(f"❌ No se encontró la hoja 'Clientes escalados'. Hojas disponibles: {[ws.title for ws in spreadsheet.worksheets()]}")
+            return
+        sheet.append_row([fecha, nombre, telefono, cedula, empresa, incidencia, reportada_por])
+        print(f"✅ Cliente escalado guardado en hoja '{sheet.title}'")
+    except Exception as e:
+        print(f"❌ Error guardando en Clientes escalados: {type(e).__name__}: {e}")
+
+
+@app.command("/cliente-escalado")
+def reportar_cliente_escalado(ack, body, client):
+    ack()
+    client.views_open(
+        trigger_id=body["trigger_id"],
+        view={
+            "type": "modal",
+            "callback_id": "form_cliente_escalado",
+            "title": {"type": "plain_text", "text": "Cliente Escalado"},
+            "submit": {"type": "plain_text", "text": "Enviar"},
+            "blocks": [
+                {"type": "input", "block_id": "nombre",
+                 "label": {"type": "plain_text", "text": "Nombre del cliente"},
+                 "element": {"type": "plain_text_input", "action_id": "valor"}},
+                {"type": "input", "block_id": "telefono",
+                 "label": {"type": "plain_text", "text": "Teléfono del cliente"},
+                 "element": {"type": "plain_text_input", "action_id": "valor"}},
+                {"type": "input", "block_id": "cedula",
+                 "label": {"type": "plain_text", "text": "Cédula del cliente"},
+                 "element": {"type": "plain_text_input", "action_id": "valor"}},
+                {"type": "input", "block_id": "empresa",
+                 "label": {"type": "plain_text", "text": "Empresa"},
+                 "element": {"type": "plain_text_input", "action_id": "valor"}},
+                {"type": "input", "block_id": "incidencia",
+                 "label": {"type": "plain_text", "text": "Incidencia (describe el problema)"},
+                 "element": {"type": "plain_text_input", "action_id": "valor", "multiline": True}},
+                {"type": "input", "block_id": "reportada_por",
+                 "label": {"type": "plain_text", "text": "Reportada por"},
+                 "element": {"type": "static_select", "action_id": "valor",
+                             "placeholder": {"type": "plain_text", "text": "Selecciona"},
+                             "options": _opciones_cobradores()}}
+            ]
+        }
+    )
+
+
+@app.view("form_cliente_escalado")
+def recibir_cliente_escalado(ack, body, client):
+    ack()
+    valores = body["view"]["state"]["values"]
+    nombre = valores["nombre"]["valor"]["value"]
+    telefono = valores["telefono"]["valor"]["value"]
+    cedula = valores["cedula"]["valor"]["value"]
+    empresa = valores["empresa"]["valor"]["value"]
+    incidencia = valores["incidencia"]["valor"]["value"]
+    reportada_por = valores["reportada_por"]["valor"]["selected_option"]["value"]
+    usuario_slack = body["user"]["id"]
+    fecha = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y %H:%M")
+    guardar_cliente_escalado(fecha, nombre, telefono, cedula, empresa, incidencia, reportada_por)
+    texto = (
+        f"*Nuevo cliente escalado* 🚩\n"
+        f"*Fecha:* {fecha}\n"
+        f"*Reportado por:* <@{usuario_slack}> ({reportada_por})\n"
+        f"*Cliente:* {nombre}\n"
+        f"*Teléfono:* {telefono}\n"
+        f"*Cédula:* {cedula}\n"
+        f"*Empresa:* {empresa}\n"
+        f"*Incidencia:* {incidencia}"
+    )
+    try:
+        client.chat_postMessage(channel=CANAL_ESCALADOS, text="Nuevo cliente escalado",
+                                blocks=[{"type": "section", "text": {"type": "mrkdwn", "text": texto}}])
+    except Exception as e:
+        print(f"⚠️ No se pudo enviar mensaje al canal de escalados: {e}")
+# ============ FIN COMANDO /cliente-escalado ============
+
 # ============ RADAR DE PROMESAS DE PAGO (Fase 1) ============
 CANAL_SEGUIMIENTO = "C0BJWPMA3NF"
 SUPERVISOR_ID = "U0B51AREWDU"  # Leandro Quoota
