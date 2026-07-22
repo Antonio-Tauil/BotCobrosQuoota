@@ -271,7 +271,7 @@ def recibir_cobro(ack, body, client):
     banco = valores["banco"]["valor"]["selected_option"]["value"]
     tasa_bcv_str = valores["tasa_bcv"]["valor"]["value"]
     cobrador_slack = body["user"]["id"]
-    fecha = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y %H:%M")
+    fecha = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y")
     try:
         monto_bs_num = parse_numero(monto_bs_str)
         tasa_bcv_num = parse_numero(tasa_bcv_str)
@@ -316,7 +316,7 @@ def aprobar(ack, body, client):
     texto_original = body["message"]["blocks"][0]["text"]["text"]
     if _ya_procesado(texto_original):
         return
-    fecha_revision = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y %H:%M")
+    fecha_revision = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y")
     registro_id = _id_amigable("COBRO", body["message"]["ts"])
     resultado = "ERROR"
     try:
@@ -344,7 +344,7 @@ def rechazar(ack, body, client):
     texto_original = body["message"]["blocks"][0]["text"]["text"]
     if _ya_procesado(texto_original):
         return
-    fecha_revision = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y %H:%M")
+    fecha_revision = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y")
     client.chat_update(
         channel=body["channel"]["id"], ts=body["message"]["ts"], text="Cobro RECHAZADO",
         blocks=[{"type": "section", "text": {"type": "mrkdwn",
@@ -442,7 +442,7 @@ def recibir_domiciliacion(ack, body, client):
     tasa_bcv_str = valores["tasa_bcv"]["valor"]["value"]
     cobrador = valores["cobrador"]["valor"]["selected_option"]["value"]
     usuario_slack = body["user"]["id"]
-    fecha = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y %H:%M")
+    fecha = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y")
     try:
         monto_bs_num = parse_numero(monto_bs_str)
         tasa_bcv_num = parse_numero(tasa_bcv_str)
@@ -493,7 +493,7 @@ def aprobar_domiciliacion(ack, body, client):
     texto_original = body["message"]["blocks"][0]["text"]["text"]
     if _ya_procesado(texto_original):
         return
-    fecha_revision = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y %H:%M")
+    fecha_revision = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y")
     registro_id = _id_amigable("DOMIC", body["message"]["ts"])
     resultado = "ERROR"
     try:
@@ -520,7 +520,7 @@ def rechazar_domiciliacion(ack, body, client):
     texto_original = body["message"]["blocks"][0]["text"]["text"]
     if _ya_procesado(texto_original):
         return
-    fecha_revision = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y %H:%M")
+    fecha_revision = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y")
     client.chat_update(
         channel=body["channel"]["id"], ts=body["message"]["ts"], text="Domiciliación RECHAZADA",
         blocks=[{"type": "section", "text": {"type": "mrkdwn",
@@ -630,7 +630,7 @@ def recibir_cobro2(ack, body, client):
     tasa_bcv_str = valores["tasa_bcv"]["valor"]["value"]
     referencia = valores["referencia"]["valor"]["value"]
     usuario_slack = body["user"]["id"]
-    fecha = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y %H:%M")
+    fecha = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y")
     try:
         monto_bs_num = parse_numero(monto_bs_str)
         tasa_bcv_num = parse_numero(tasa_bcv_str)
@@ -676,7 +676,7 @@ def aprobar_cobro2(ack, body, client):
     texto_original = body["message"]["blocks"][0]["text"]["text"]
     if _ya_procesado(texto_original):
         return
-    fecha_revision = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y %H:%M")
+    fecha_revision = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y")
     registro_id = _id_amigable("CALLCENTER", body["message"]["ts"])
     resultado = "ERROR"
     try:
@@ -704,7 +704,7 @@ def rechazar_cobro2(ack, body, client):
     texto_original = body["message"]["blocks"][0]["text"]["text"]
     if _ya_procesado(texto_original):
         return
-    fecha_revision = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y %H:%M")
+    fecha_revision = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y")
     client.chat_update(
         channel=body["channel"]["id"], ts=body["message"]["ts"], text="Cobro RECHAZADO",
         blocks=[{"type": "section", "text": {"type": "mrkdwn",
@@ -818,7 +818,7 @@ def recibir_conciliacion(ack, body, client):
     conciliador = valores["conciliador"]["valor"]["selected_option"]["value"]
     observaciones = valores["observaciones"]["valor"]["value"] or ""
     usuario_slack = body["user"]["id"]
-    fecha = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y %H:%M")
+    fecha = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y")
     try:
         rep_num = parse_numero(monto_reportado_str)
         banco_num = parse_numero(monto_banco_str)
@@ -881,7 +881,7 @@ def aprobar_conciliacion(ack, body, client):
     texto_original = body["message"]["blocks"][0]["text"]["text"]
     if _ya_procesado(texto_original):
         return
-    fecha_revision = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y %H:%M")
+    fecha_revision = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y")
     registro_id = _id_amigable("CONC", body["message"]["ts"])
     resultado = "ERROR"
     try:
@@ -909,7 +909,7 @@ def rechazar_conciliacion(ack, body, client):
     texto_original = body["message"]["blocks"][0]["text"]["text"]
     if _ya_procesado(texto_original):
         return
-    fecha_revision = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y %H:%M")
+    fecha_revision = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y")
     client.chat_update(
         channel=body["channel"]["id"], ts=body["message"]["ts"], text="Conciliación RECHAZADA",
         blocks=[{"type": "section", "text": {"type": "mrkdwn",
@@ -1027,7 +1027,7 @@ def recibir_liquidacion_nueva(ack, body, client):
     base = valores["base"]["valor"]["selected_option"]["value"]
     estatus = valores["estatus"]["valor"]["selected_option"]["value"]
     usuario_slack = body["user"]["id"]
-    fecha = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y %H:%M")
+    fecha = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y")
     texto = (
         f"*Nueva persona en Lista VIP* 🌟\n"
         f"*Fecha:* {fecha}\n"
@@ -1063,7 +1063,7 @@ def aprobar_liquidacion_nueva(ack, body, client):
     texto_original = body["message"]["blocks"][0]["text"]["text"]
     if _ya_procesado(texto_original):
         return
-    fecha_revision = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y %H:%M")
+    fecha_revision = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y")
     registro_id = _id_amigable("LIQNUEVA", body["message"]["ts"])
     meta = body["message"].get("metadata", {}).get("event_payload", {})
     resultado = guardar_liquidacion_nueva(
@@ -1087,7 +1087,7 @@ def rechazar_liquidacion_nueva(ack, body, client):
     texto_original = body["message"]["blocks"][0]["text"]["text"]
     if _ya_procesado(texto_original):
         return
-    fecha_revision = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y %H:%M")
+    fecha_revision = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y")
     client.chat_update(
         channel=body["channel"]["id"], ts=body["message"]["ts"], text="Liquidación RECHAZADA",
         blocks=[{"type": "section", "text": {"type": "mrkdwn",
@@ -1129,7 +1129,7 @@ def recibir_liquidacion_estatus(ack, body, client):
     nombre = valores["nombre"]["valor"]["value"]
     estatus = valores["estatus"]["valor"]["selected_option"]["value"]
     usuario_slack = body["user"]["id"]
-    fecha = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y %H:%M")
+    fecha = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y")
     texto = (
         f"*Cambio de estatus solicitado* 🔄\n"
         f"*Fecha:* {fecha}\n"
@@ -1162,7 +1162,7 @@ def aprobar_liquidacion_estatus(ack, body, client):
     texto_original = body["message"]["blocks"][0]["text"]["text"]
     if _ya_procesado(texto_original):
         return
-    fecha_revision = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y %H:%M")
+    fecha_revision = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y")
     meta = body["message"].get("metadata", {}).get("event_payload", {})
     encontrado = actualizar_estatus_liquidacion(meta.get("cedula", ""), meta.get("estatus", ""), fecha_revision)
     if encontrado:
@@ -1181,7 +1181,7 @@ def rechazar_liquidacion_estatus(ack, body, client):
     texto_original = body["message"]["blocks"][0]["text"]["text"]
     if _ya_procesado(texto_original):
         return
-    fecha_revision = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y %H:%M")
+    fecha_revision = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y")
     client.chat_update(
         channel=body["channel"]["id"], ts=body["message"]["ts"], text="Cambio de estatus RECHAZADO",
         blocks=[{"type": "section", "text": {"type": "mrkdwn",
@@ -1291,7 +1291,7 @@ def recibir_cobro_comercial(ack, body, client):
     tasa_bcv_str = valores["tasa_bcv"]["valor"]["value"]
     empresa = valores["empresa"]["valor"]["value"]
     usuario_slack = body["user"]["id"]
-    fecha = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y %H:%M")
+    fecha = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y")
     try:
         monto_bs_num = parse_numero(monto_bs_str)
         tasa_bcv_num = parse_numero(tasa_bcv_str)
@@ -1337,7 +1337,7 @@ def aprobar_comercial(ack, body, client):
     texto_original = body["message"]["blocks"][0]["text"]["text"]
     if _ya_procesado(texto_original):
         return
-    fecha_revision = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y %H:%M")
+    fecha_revision = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y")
     registro_id = _id_amigable("COMERCIAL", body["message"]["ts"])
     resultado = "ERROR"
     try:
@@ -1365,7 +1365,7 @@ def rechazar_comercial(ack, body, client):
     texto_original = body["message"]["blocks"][0]["text"]["text"]
     if _ya_procesado(texto_original):
         return
-    fecha_revision = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y %H:%M")
+    fecha_revision = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y")
     client.chat_update(
         channel=body["channel"]["id"], ts=body["message"]["ts"], text="Cobro RECHAZADO",
         blocks=[{"type": "section", "text": {"type": "mrkdwn",
@@ -1494,7 +1494,7 @@ def aprobar_contacto_legal(ack, body, client):
     texto_original = body["message"]["blocks"][0]["text"]["text"]
     if _ya_procesado(texto_original):
         return
-    fecha_revision = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y %H:%M")
+    fecha_revision = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y")
     registro_id = _id_amigable("LEGAL", body["message"]["ts"])
     meta = body["message"].get("metadata", {}).get("event_payload", {})
     resultado = guardar_en_contactados_legal(
@@ -1519,7 +1519,7 @@ def rechazar_contacto_legal(ack, body, client):
     texto_original = body["message"]["blocks"][0]["text"]["text"]
     if _ya_procesado(texto_original):
         return
-    fecha_revision = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y %H:%M")
+    fecha_revision = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y")
     client.chat_update(
         channel=body["channel"]["id"], ts=body["message"]["ts"], text="Contacto Legal RECHAZADO",
         blocks=[{"type": "section", "text": {"type": "mrkdwn",
@@ -1660,7 +1660,7 @@ def recibir_cliente_escalado(ack, body, client):
     incidencia = valores["incidencia"]["valor"]["value"]
     reportada_por = valores["reportada_por"]["valor"]["selected_option"]["value"]
     usuario_slack = body["user"]["id"]
-    fecha = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y %H:%M")
+    fecha = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y")
     guardar_cliente_escalado(fecha, nombre, telefono, cedula, empresa, incidencia, reportada_por)
     texto = (
         f"*Nuevo cliente escalado* 🚩\n"
