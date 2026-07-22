@@ -1600,31 +1600,51 @@ COBRADOR_SLACK_IDS = {
     # BARBARA aún sin ID: se muestra en texto
 }
 
+# Cuántos días hacia atrás/adelante se considera una fecha "creíble"
+RADAR_RANGO_DIAS = 90
+
 
 def _mencion_cobrador(nombre):
-    """Devuelve la mención @ del cobrador; si no hay ID, devuelve el nombre en texto."""
     clave = str(nombre).strip().upper()
     ids = COBRADOR_SLACK_IDS.get(clave)
     if ids:
         return " ".join(f"<@{uid}>" for uid in ids)
-    return f"*{nombre}*"
+    return f"*{nombre or 'Sin cobrador'}*"
 
 
-def _parsear_fecha(texto):
-    """Convierte 'DD/MM/YYYY' o 'DD/MM/YY' a un objeto date. None si no se puede."""
-    if not texto:
-        return None
+def _parsear_fecha_radar(texto, hoy):
+    """Devuelve (fecha, motivo). fecha=date si es creíble; si no, fecha=None y motivo explica por qué.
+    Corrige años de 3 dígitos (206->2026) y de 2 dígitos. Marca como 'revisar' lo fuera de rango."""
+    if not texto or not str(texto).strip():
+        return None, "sin fecha"
     t = str(texto).strip()
-    for fmt in ("%d/%m/%Y", "%d/%m/%y", "%d-%m-%Y", "%d-%m-%y"):
-        try:
-            return datetime.strptime(t, fmt).date()
-        except ValueError:
-            continue
-    return None
+    # Separar día/mes/año aceptando / o -
+    partes = re.split(r"[/\-]", t)
+    if len(partes) != 3:
+        return None, "formato raro"
+    try:
+        dia = int(partes[0]); mes = int(partes[1]); anio = int(partes[2])
+    except ValueError:
+        return None, "no numérica"
+    # Corregir el año
+    if anio < 100:            # 2 dígitos: 26 -> 2026
+        anio += 2000
+    elif 100 <= anio < 1000:  # 3 dígitos: 206 -> 2026 (toma el año actual como base)
+        anio = int(str(hoy.year)[:1] + str(anio).zfill(3))  # 206 -> 2 + 026? -> ajuste abajo
+        # Ajuste simple y seguro: usar el año actual (los de 3 dígitos son claramente error de tipeo)
+        anio = hoy.year
+    try:
+        f = date(anio, mes, dia)
+    except ValueError:
+        return None, "día/mes inválido"
+    # ¿Está dentro del rango creíble?
+    if abs((f - hoy).days) > RADAR_RANGO_DIAS:
+        return None, "fuera de rango"
+    return f, "ok"
 
 
 def generar_resumen_promesas():
-    """Lee la hoja 'Contactados', arma el resumen de promesas de hoy + vencidas y lo publica."""
+    """Lee 'Contactados', agrupa promesas por cobrador y publica el resumen."""
     try:
         creds_json = json.loads(os.environ["GOOGLE_CREDENTIALS"])
         creds_json["private_key"] = creds_json["private_key"].replace("\\n", "\n")
@@ -1647,66 +1667,106 @@ def generar_resumen_promesas():
         hoy = datetime.now(ZoneInfo("America/Caracas")).date()
         hoy_txt = hoy.strftime("%d/%m/%Y")
 
-        de_hoy = []
-        vencidas = []
-        # Columnas (0-based): A=0 Fecha, B=1 Nombre, C=2 Telefono, D=3 Cedula,
-        # E=4 Compromiso, F=5 Cobrador, G=6 Comentario, H=7 Estado promesa, I=8 Fecha resultado
+        # Estructura: por cobrador -> {"hoy": [...], "vencidas": [...]}
+        por_cobrador = {}
+        revisar = []       # fechas raras
+        total_hoy = 0
+        total_venc = 0
+
         for i, fila in enumerate(valores):
             if i == 0:
-                continue  # encabezados
+                continue
+
             def celda(idx):
                 return fila[idx].strip() if len(fila) > idx else ""
-            nombre = celda(1)
+
+            nombre = celda(1) or "(sin nombre)"
             cedula = celda(3)
             compromiso = celda(4)
-            cobrador = celda(5)
+            cobrador = celda(5) or "Sin cobrador"
             estado = celda(7)
-            if estado:  # ya tiene resultado (Cumplida/Fallida) -> se ignora
+            if estado:  # ya resuelta
                 continue
-            fecha_prom = _parsear_fecha(compromiso)
+
+            fecha_prom, motivo = _parsear_fecha_radar(compromiso, hoy)
+
             if fecha_prom is None:
-                continue  # sin fecha válida, no entra al radar
-            item = {"nombre": nombre or "(sin nombre)", "cedula": cedula,
-                    "cobrador": cobrador, "fecha": fecha_prom}
+                # Solo mandamos a "revisar" las que tienen ALGO escrito pero está mal
+                if motivo in ("formato raro", "no numérica", "día/mes inválido", "fuera de rango"):
+                    revisar.append({"nombre": nombre, "cedula": cedula,
+                                    "cobrador": cobrador, "texto": compromiso})
+                continue  # "sin fecha" simplemente se ignora
+
+            grupo = por_cobrador.setdefault(cobrador, {"hoy": [], "vencidas": []})
+            item = {"nombre": nombre, "cedula": cedula, "fecha": fecha_prom}
             if fecha_prom == hoy:
-                de_hoy.append(item)
+                grupo["hoy"].append(item); total_hoy += 1
             elif fecha_prom < hoy:
-                vencidas.append(item)
+                grupo["vencidas"].append(item); total_venc += 1
+            # (futuras dentro de rango: no se listan hoy)
 
-        # Ordenar vencidas de la más antigua a la más reciente
-        vencidas.sort(key=lambda x: x["fecha"])
+        # ---- Armar el mensaje ----
+        lineas = []
+        lineas.append(f"📅 *RADAR DE PROMESAS DE PAGO*  ·  {hoy_txt}")
+        lineas.append(f"Resumen: *{total_hoy}* para hoy · *{total_venc}* vencidas · *{len(revisar)}* por revisar")
+        lineas.append("━━━━━━━━━━━━━━━━━━━━")
 
-        # Armar el mensaje
-        lineas = [f"📅 *Radar de Promesas de Pago — {hoy_txt}*", ""]
-
-        if de_hoy:
-            lineas.append(f"☀️ *Promesas para HOY ({len(de_hoy)}):*")
-            for it in de_hoy:
-                ced = f" ({it['cedula']})" if it["cedula"] else ""
-                lineas.append(f"• {it['nombre']}{ced} — {_mencion_cobrador(it['cobrador'])}")
+        if not por_cobrador:
             lineas.append("")
-
-        if vencidas:
-            lineas.append(f"⏰ *VENCIDAS sin marcar ({len(vencidas)}):*")
-            for it in vencidas:
-                ced = f" ({it['cedula']})" if it["cedula"] else ""
-                dias = (hoy - it["fecha"]).days
-                venc = it["fecha"].strftime("%d/%m/%Y")
-                alerta = " 🔴" if dias >= 3 else ""
-                lineas.append(f"• {it['nombre']}{ced} — venció {venc} ({dias}d){alerta} — {_mencion_cobrador(it['cobrador'])}")
-            lineas.append("")
-            # Escalamiento: si hay vencidas de 3+ días, avisar al supervisor
-            muy_vencidas = [v for v in vencidas if (hoy - v["fecha"]).days >= 3]
-            if muy_vencidas:
-                lineas.append(f"🔴 <@{SUPERVISOR_ID}> hay {len(muy_vencidas)} promesa(s) vencida(s) 3+ días sin marcar.")
+            lineas.append("✅ No hay promesas de hoy ni vencidas con fecha válida.")
+        else:
+            # Orden alfabético por cobrador
+            for cobrador in sorted(por_cobrador.keys(), key=lambda x: x.upper()):
+                grupo = por_cobrador[cobrador]
+                if not grupo["hoy"] and not grupo["vencidas"]:
+                    continue
                 lineas.append("")
+                lineas.append(f"👤 *{cobrador.upper()}*  {_mencion_cobrador(cobrador)}")
 
-        if not de_hoy and not vencidas:
-            lineas.append("✅ No hay promesas pendientes para hoy ni vencidas. ¡Todo al día!")
+                if grupo["hoy"]:
+                    lineas.append(f"   ☀️ _Para hoy ({len(grupo['hoy'])}):_")
+                    for it in grupo["hoy"]:
+                        ced = f" · {it['cedula']}" if it["cedula"] else ""
+                        lineas.append(f"      • {it['nombre']}{ced}")
+
+                if grupo["vencidas"]:
+                    # Más recientes primero (fecha más nueva arriba)
+                    grupo["vencidas"].sort(key=lambda x: x["fecha"], reverse=True)
+                    total_v = len(grupo["vencidas"])
+                    lineas.append(f"   ⏰ _Vencidas ({total_v}):_")
+                    for it in grupo["vencidas"][:10]:
+                        ced = f" · {it['cedula']}" if it["cedula"] else ""
+                        dias = (hoy - it["fecha"]).days
+                        alerta = " 🔴" if dias >= 3 else ""
+                        lineas.append(f"      • {it['nombre']}{ced} — hace {dias}d{alerta}")
+                    if total_v > 10:
+                        lineas.append(f"      … y {total_v - 10} vencida(s) más (ver Sheet)")
+
+        # ---- Sección "revisar fecha" (resumida, no abruma) ----
+        if revisar:
+            lineas.append("")
+            lineas.append("━━━━━━━━━━━━━━━━━━━━")
+            lineas.append(f"⚠️ *{len(revisar)} promesa(s) con fecha rara* (corregir en el Sheet). Ejemplos:")
+            for it in revisar[:5]:
+                ced = f" · {it['cedula']}" if it["cedula"] else ""
+                lineas.append(f"      • {it['nombre']}{ced} — escrito: \"{it['texto']}\"")
+            if len(revisar) > 5:
+                lineas.append(f"      … y {len(revisar) - 5} más.")
+
+        # ---- Escalamiento al supervisor ----
+        muy_vencidas = total_venc  # cuántas vencidas totales
+        if muy_vencidas > 0:
+            lineas.append("")
+            lineas.append(f"🔴 <@{SUPERVISOR_ID}> hay *{muy_vencidas}* promesa(s) vencida(s) que requieren seguimiento.")
 
         mensaje = "\n".join(lineas).strip()
+
+        # Slack corta mensajes muy largos (~40k). Si es enorme, avisamos y mandamos recortado.
+        if len(mensaje) > 38000:
+            mensaje = mensaje[:38000] + "\n\n… (lista recortada por tamaño; hay más en el Sheet)"
+
         app.client.chat_postMessage(channel=CANAL_SEGUIMIENTO, text=mensaje)
-        print(f"✅ Radar publicado: {len(de_hoy)} de hoy, {len(vencidas)} vencidas")
+        print(f"✅ Radar publicado: {total_hoy} hoy, {total_venc} vencidas, {len(revisar)} por revisar")
     except Exception as e:
         print(f"❌ Error generando el resumen de promesas: {type(e).__name__}: {e}")
 
