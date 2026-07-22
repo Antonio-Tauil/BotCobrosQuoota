@@ -1527,6 +1527,60 @@ def rechazar_contacto_legal(ack, body, client):
 # ============ FIN COMANDO /contacto-legal ============
 
 
+# ============ COMANDO TEMPORAL /listar-ids ============
+# Devuelve (solo a quien lo ejecuta) la lista de miembros del workspace con su ID de Slack.
+# Útil para recolectar los IDs de los cobradores. Se puede borrar después.
+@app.command("/listar-ids")
+def listar_ids(ack, body, client):
+    ack()
+    solicitante = body["user_id"]
+    canal = body["channel_id"]
+    try:
+        miembros = []
+        cursor = None
+        while True:
+            resp = client.users_list(limit=200, cursor=cursor)
+            for u in resp["members"]:
+                if u.get("deleted"):
+                    continue
+                if u.get("is_bot"):
+                    continue
+                if u.get("id") == "USLACKBOT":
+                    continue
+                perfil = u.get("profile", {}) or {}
+                nombre = (perfil.get("real_name") or u.get("real_name")
+                          or perfil.get("display_name") or u.get("name") or "sin nombre")
+                miembros.append(f"{nombre} = {u['id']}")
+            cursor = resp.get("response_metadata", {}).get("next_cursor")
+            if not cursor:
+                break
+
+        if not miembros:
+            client.chat_postEphemeral(channel=canal, user=solicitante,
+                                      text="No se encontraron miembros.")
+            return
+
+        miembros.sort(key=lambda x: x.lower())
+        encabezado = f"🪪 *Miembros del workspace ({len(miembros)}):*\n"
+        # Slack limita el tamaño del mensaje; enviamos en bloques de 50 líneas
+        bloque = []
+        conteo = 0
+        for i, linea in enumerate(miembros, 1):
+            bloque.append(linea)
+            if len(bloque) == 50 or i == len(miembros):
+                conteo += 1
+                texto = (encabezado if conteo == 1 else f"*(continuación {conteo})*\n") + "```\n" + "\n".join(bloque) + "\n```"
+                client.chat_postEphemeral(channel=canal, user=solicitante, text=texto)
+                bloque = []
+    except Exception as e:
+        client.chat_postEphemeral(
+            channel=canal, user=solicitante,
+            text=(f"❌ No se pudo obtener la lista: {type(e).__name__}: {e}\n\n"
+                  "Puede que al bot le falte el permiso *users:read*. "
+                  "Ve a api.slack.com → tu app → OAuth & Permissions → Scopes → agrega *users:read* → Reinstall.")
+        )
+# ============ FIN COMANDO /listar-ids ============
+
 if __name__ == "__main__":
     print("🤖 Robotín está despierto y conectándose a Slack...")
     SocketModeHandler(app, os.environ["SLACK_APP_TOKEN"]).start()
