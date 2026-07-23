@@ -1679,6 +1679,129 @@ def recibir_cliente_escalado(ack, body, client):
         print(f"⚠️ No se pudo enviar mensaje al canal de escalados: {e}")
 # ============ FIN COMANDO /cliente-escalado ============
 
+
+# ============ COMANDO /buscar-cliente (consulta por cédula) ============
+# Busca una cédula en todas las hojas y devuelve el historial (solo lo ve quien pregunta).
+
+def _solo_digitos(texto):
+    return re.sub(r"\D", "", str(texto or ""))
+
+
+def _quitar_acentos(texto):
+    reemplazos = (("á", "a"), ("é", "e"), ("í", "i"), ("ó", "o"), ("ú", "u"))
+    t = str(texto).lower()
+    for a, b in reemplazos:
+        t = t.replace(a, b)
+    return t
+
+
+def _buscar_en_hoja(cliente, sheet_id, nombre_hoja, etiqueta, cedula_digitos):
+    """Devuelve lista de líneas (strings) con las coincidencias en una hoja."""
+    resultados = []
+    try:
+        spreadsheet = cliente.open_by_key(sheet_id)
+        # Encontrar la hoja (tolerante a mayúsculas/acentos)
+        hoja = None
+        objetivo = _quitar_acentos(nombre_hoja).strip()
+        for ws in spreadsheet.worksheets():
+            if _quitar_acentos(ws.title).strip() == objetivo:
+                hoja = ws
+                break
+        if hoja is None:
+            return resultados
+        valores = hoja.get_all_values()
+        if not valores:
+            return resultados
+        encabezados = [_quitar_acentos(c).strip() for c in valores[0]]
+        # Buscar la columna de cédula por su encabezado
+        col_ced = None
+        for idx, h in enumerate(encabezados):
+            if "ced" in h:  # cubre "cedula", "cédula", "cedula del cliente"
+                col_ced = idx
+                break
+        if col_ced is None:
+            return resultados  # esta hoja no tiene cédula (ej. Domiciliación)
+        for fila in valores[1:]:
+            if len(fila) > col_ced and _solo_digitos(fila[col_ced]) == cedula_digitos and cedula_digitos:
+                fecha = fila[0] if len(fila) > 0 else ""
+                nombre = fila[1] if len(fila) > 1 else ""
+                resultados.append(f"   • {fecha} — {nombre}")
+    except Exception as e:
+        print(f"⚠️ Error buscando en '{etiqueta}': {type(e).__name__}: {e}")
+    return resultados
+
+
+@app.command("/buscar-cliente")
+def buscar_cliente(ack, body, client):
+    ack()
+    texto = (body.get("text") or "").strip()
+    canal = body["channel_id"]
+    usuario = body["user_id"]
+
+    if not texto:
+        client.chat_postEphemeral(channel=canal, user=usuario,
+            text="Escribe la cédula después del comando. Ejemplo: `/buscar-cliente 12345678`")
+        return
+
+    cedula_digitos = _solo_digitos(texto)
+    if not cedula_digitos:
+        client.chat_postEphemeral(channel=canal, user=usuario,
+            text="No detecté números en lo que escribiste. Ejemplo: `/buscar-cliente 12345678`")
+        return
+
+    client.chat_postEphemeral(channel=canal, user=usuario,
+        text=f"🔎 Buscando la cédula *{texto}* en todas las hojas... un momento.")
+
+    try:
+        gcliente = get_cliente_busqueda()
+    except Exception as e:
+        client.chat_postEphemeral(channel=canal, user=usuario,
+            text=f"❌ No pude conectar con Google Sheets: {type(e).__name__}: {e}")
+        return
+
+    # Fuentes: (sheet_id, nombre_hoja, etiqueta)
+    fuentes = [
+        (os.environ["SHEET_ID"], "Contactados", "📞 Contactos"),
+        (os.environ["SHEET_ID"], "Pagos Recibidos", "💰 Cobros"),
+        (os.environ["SHEET_ID"], "Conciliacion", "🧾 Conciliaciones"),
+        (SHEET_ID_COBRO2, "Hoja1", "📞 Call Center"),
+        (SHEET_ID_LIQUIDACIONES, "Hoja1", "🌟 Liquidaciones"),
+        (SHEET_ID_COMERCIAL, "Sheet1", "🤝 Comercial"),
+        (SHEET_ID_LEGAL, "Contactados", "⚖️ Legal"),
+        (SHEET_ID_ESCALADOS, "Clientes escalados", "🚩 Escalados"),
+    ]
+
+    bloques = []
+    total = 0
+    for sheet_id, nombre_hoja, etiqueta in fuentes:
+        lineas = _buscar_en_hoja(gcliente, sheet_id, nombre_hoja, etiqueta, cedula_digitos)
+        if lineas:
+            total += len(lineas)
+            bloque = [f"*{etiqueta}* ({len(lineas)}):"]
+            bloque.extend(lineas[:10])
+            if len(lineas) > 10:
+                bloque.append(f"   … y {len(lineas) - 10} más")
+            bloques.append("\n".join(bloque))
+
+    if total == 0:
+        mensaje = f"🔎 No encontré registros para la cédula *{texto}* en ninguna hoja."
+    else:
+        mensaje = f"🗂️ *Historial de la cédula {texto}* — {total} registro(s):\n\n" + "\n\n".join(bloques)
+
+    client.chat_postEphemeral(channel=canal, user=usuario, text=mensaje)
+
+
+# Conexión propia para la búsqueda (usa el mismo patrón del resto del bot)
+def get_cliente_busqueda():
+    creds_json = json.loads(os.environ["GOOGLE_CREDENTIALS"])
+    creds_json["private_key"] = creds_json["private_key"].replace("\\n", "\n")
+    creds = Credentials.from_service_account_info(
+        creds_json,
+        scopes=["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+    )
+    return gspread.authorize(creds)
+# ============ FIN COMANDO /buscar-cliente ============
+
 # ============ RADAR DE PROMESAS DE PAGO (Fase 1) ============
 CANAL_SEGUIMIENTO = "C0BJWPMA3NF"
 SUPERVISOR_ID = "U0B51AREWDU"  # Leandro Quoota
