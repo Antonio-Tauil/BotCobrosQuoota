@@ -77,7 +77,7 @@ def _ya_procesado(texto):
 
 
 # ============ LISTA DE COBRADORES (compartida) ============
-COBRADORES = ["DIEGO", "IARA", "REBECA", "MARIANGEL", "LUISMAR", "ANGELY", "DANIEL", "BARBARA", "MARIANA", "ANDRES"]
+COBRADORES = ["DIEGO", "IARA", "REBECA", "MARIANGEL", "LUISMAR", "ANGELY", "DANIEL", "BARBARA", "MARIANA", "ANDRES", "NELMAYRI", "ALEJANDRO", "ISAAC"]
 
 
 def _opciones_cobradores():
@@ -1817,6 +1817,9 @@ COBRADOR_SLACK_IDS = {
     "DANIEL": ["U0BAH6AFMA7"],
     "MARIANA": ["U0BHUF23EQY"],
     "ANDRES": ["U0BH22WRTQR"],
+    "NELMAYRI": ["U0BK8E35T9A"],
+    "ALEJANDRO": ["U0BLAV5EVSR"],
+    "ISAAC": ["U0BL80V55DZ"],
     # BARBARA aún sin ID: se muestra en texto
 }
 
