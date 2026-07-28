@@ -1917,7 +1917,13 @@ def generar_resumen_promesas():
                                     "cobrador": cobrador, "texto": compromiso})
                 continue  # "sin fecha" simplemente se ignora
 
-            grupo = por_cobrador.setdefault(cobrador, {"hoy": [], "vencidas": []})
+            grupo = por_cobrador.setdefault(cobrador, {"hoy": [], "vencidas": [], "vistas": set()})
+            # Evitar duplicados: misma cédula ya contada para este cobrador
+            ced_norm = _solo_digitos(cedula)
+            if ced_norm and ced_norm in grupo["vistas"]:
+                continue
+            if ced_norm:
+                grupo["vistas"].add(ced_norm)
             item = {"nombre": nombre, "cedula": cedula, "fecha": fecha_prom}
             if fecha_prom == hoy:
                 grupo["hoy"].append(item); total_hoy += 1
@@ -2002,6 +2008,89 @@ def probar_radar(ack, body, client):
     generar_resumen_promesas()
 # ============ FIN RADAR DE PROMESAS ============
 
+
+
+# ============ FASE 2: MARCAR PROMESAS (cumplida / fallida) ============
+# Marca TODAS las filas de 'Contactados' con esa cédula:
+#   Columna H (8) = Estado de promesa (Cumplida/Fallida)
+#   Columna I (9) = Fecha resultado (hoy)
+# Así la promesa desaparece del radar.
+
+def _marcar_promesa(cedula_texto, estado):
+    """Devuelve (cantidad_marcada, nombre_ejemplo)."""
+    cedula_digitos = _solo_digitos(cedula_texto)
+    if not cedula_digitos:
+        return 0, None
+    cliente = get_cliente_busqueda()
+    spreadsheet = cliente.open_by_key(os.environ["SHEET_ID"])
+    hoja = None
+    for ws in spreadsheet.worksheets():
+        if ws.title.strip().lower() == "contactados":
+            hoja = ws
+            break
+    if hoja is None:
+        return 0, None
+    valores = hoja.get_all_values()
+    hoy_txt = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y")
+    marcadas = 0
+    nombre_ejemplo = None
+    for i, fila in enumerate(valores):
+        if i == 0:
+            continue
+        # Columna D (índice 3) = Cédula
+        if len(fila) > 3 and _solo_digitos(fila[3]) == cedula_digitos:
+            num_fila = i + 1  # gspread cuenta desde 1
+            hoja.update_cell(num_fila, 8, estado)   # H = Estado de promesa
+            hoja.update_cell(num_fila, 9, hoy_txt)  # I = Fecha resultado
+            marcadas += 1
+            if nombre_ejemplo is None and len(fila) > 1:
+                nombre_ejemplo = fila[1]
+    return marcadas, nombre_ejemplo
+
+
+def _comando_marcar(ack, body, client, estado, emoji):
+    ack()
+    texto = (body.get("text") or "").strip()
+    canal = body["channel_id"]
+    usuario = body["user_id"]
+    sufijo = "cumplida" if estado == "Cumplida" else "fallida"
+    if not texto:
+        client.chat_postEphemeral(channel=canal, user=usuario,
+            text=f"Escribe la cédula. Ejemplo: `/promesa-{sufijo} 12345678`")
+        return
+    try:
+        marcadas, nombre = _marcar_promesa(texto, estado)
+    except Exception as e:
+        client.chat_postEphemeral(channel=canal, user=usuario,
+            text=f"❌ Error al marcar: {type(e).__name__}: {e}")
+        return
+    if marcadas == 0:
+        client.chat_postEphemeral(channel=canal, user=usuario,
+            text=f"⚠️ No encontré la cédula *{texto}* en Contactados. No se marcó nada.")
+        return
+    nombre_txt = f" ({nombre})" if nombre else ""
+    # Aviso público en el canal de seguimiento (quién marcó qué)
+    try:
+        client.chat_postMessage(
+            channel=CANAL_SEGUIMIENTO,
+            text=f"{emoji} <@{usuario}> marcó como *{estado}* la promesa de la cédula *{texto}*{nombre_txt} — {marcadas} registro(s) actualizado(s)."
+        )
+    except Exception as e:
+        print(f"⚠️ No se pudo avisar en el canal de seguimiento: {e}")
+    # Confirmación a quien ejecutó
+    client.chat_postEphemeral(channel=canal, user=usuario,
+        text=f"{emoji} Listo. Marqué {marcadas} registro(s) de la cédula {texto} como {estado}.")
+
+
+@app.command("/promesa-cumplida")
+def promesa_cumplida(ack, body, client):
+    _comando_marcar(ack, body, client, "Cumplida", "✅")
+
+
+@app.command("/promesa-fallida")
+def promesa_fallida(ack, body, client):
+    _comando_marcar(ack, body, client, "Fallida", "❌")
+# ============ FIN FASE 2 ============
 
 if __name__ == "__main__":
     print("🤖 Robotín está despierto y conectándose a Slack...")
