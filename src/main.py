@@ -17,8 +17,13 @@ def parse_numero(texto):
     if texto is None:
         raise ValueError("vacío")
     s = re.sub(r"[^0-9.,\-]", "", str(texto).strip())
-    if s in ("", "-", ".", ","):
+    # Quitar separadores sobrantes al inicio/fin (ej. el punto que deja "Bs.")
+    neg = s.startswith("-")
+    s = s.lstrip("-").strip(".,")
+    if s == "":
         raise ValueError("sin dígitos")
+    if neg:
+        s = "-" + s
     tiene_punto = "." in s
     tiene_coma = "," in s
     if tiene_punto and tiene_coma:
@@ -2249,7 +2254,10 @@ def generar_cierre_diario():
                 continue
 
             cantidad += 1
-            cobrador = celda(9) or "Sin cobrador"
+            cobrador_raw = celda(9) or "Sin cobrador"
+            # Normalizar: ignorar mayúsculas/minúsculas y espacios extra (REBECA = rebeca = Rebeca)
+            clave = " ".join(cobrador_raw.split()).upper()
+            nombre_bonito = " ".join(cobrador_raw.split()).title()
 
             try:
                 usd = parse_numero(celda(7))
@@ -2262,7 +2270,7 @@ def generar_cierre_diario():
 
             total_usd += usd
             total_bs += bs
-            g = por_cobrador.setdefault(cobrador, {"n": 0, "usd": 0.0, "bs": 0.0})
+            g = por_cobrador.setdefault(clave, {"nombre": nombre_bonito, "n": 0, "usd": 0.0, "bs": 0.0})
             g["n"] += 1
             g["usd"] += usd
             g["bs"] += bs
@@ -2276,9 +2284,9 @@ def generar_cierre_diario():
             lineas.append(f"📝 *Cantidad de cobros:* {cantidad}")
             lineas.append("")
             lineas.append("*Por cobrador:*")
-            for cobrador in sorted(por_cobrador.keys(), key=lambda x: por_cobrador[x]["usd"], reverse=True):
-                g = por_cobrador[cobrador]
-                lineas.append(f"   • {cobrador} — {g['n']} cobro(s) — ${g['usd']:,.2f}")
+            for clave in sorted(por_cobrador.keys(), key=lambda x: por_cobrador[x]["usd"], reverse=True):
+                g = por_cobrador[clave]
+                lineas.append(f"   • {g['nombre']} — {g['n']} cobro(s) — ${g['usd']:,.2f}")
 
         mensaje = "\n".join(lineas)
         app.client.chat_postMessage(channel=CANAL_CIERRE, text=mensaje)
