@@ -109,6 +109,79 @@ def guardar_en_contactados(fecha, nombre, telefono, cedula, compromiso, cobrador
         print(f"❌ Error guardando en Contactados: {type(e).__name__}: {e}")
 
 
+
+# ============ VALIDACIÓN DE DATOS (estricta) ============
+def _es_cedula_valida(texto):
+    t = str(texto or "").strip().upper()
+    if not t:
+        return False, "La cédula está vacía."
+    t2 = t.replace(".", "").replace("-", "").replace(" ", "")
+    m = re.match(r"^([VEJPG]?)(\d+)$", t2)
+    if not m:
+        return False, "Cédula inválida. Usa números y opcional V/E/J/P (ej: V-12.345.678)."
+    digitos = m.group(2)
+    if not (6 <= len(digitos) <= 10):
+        return False, f"La cédula debe tener entre 6 y 10 dígitos (tiene {len(digitos)})."
+    return True, ""
+
+
+def _es_telefono_valido(texto):
+    t = str(texto or "").strip()
+    if not t:
+        return False, "El teléfono está vacío."
+    limpio = re.sub(r"[()\-\s+]", "", t)
+    if not limpio.isdigit():
+        return False, "El teléfono solo debe tener números (ej: 0414-1234567)."
+    n = len(limpio)
+    if n not in (10, 11, 12):
+        return False, f"El teléfono debe tener 10, 11 o 12 dígitos (tiene {n}). Ej: 04141234567."
+    return True, ""
+
+
+def _es_fecha_valida(texto):
+    t = str(texto or "").strip()
+    if not t:
+        return False, "La fecha está vacía."
+    partes = re.split(r"[/\-]", t)
+    if len(partes) != 3:
+        return False, "Fecha inválida. Usa el formato DD/MM/AAAA (ej: 25/12/2026)."
+    try:
+        d = int(partes[0]); mth = int(partes[1]); y = int(partes[2])
+    except ValueError:
+        return False, "La fecha debe tener solo números en formato DD/MM/AAAA."
+    if y < 100:
+        y += 2000
+    try:
+        date(y, mth, d)
+    except ValueError:
+        return False, "Esa fecha no existe. Revisa día/mes (formato DD/MM/AAAA)."
+    if not (2024 <= y <= 2030):
+        return False, "El año parece un error de tipeo. Usa DD/MM/AAAA (ej: 25/12/2026)."
+    return True, ""
+
+
+_VALIDADORES = {
+    "cedula": _es_cedula_valida,
+    "telefono": _es_telefono_valido,
+    "fecha": _es_fecha_valida,
+}
+
+
+def _validar_view(valores, specs):
+    """Devuelve un dict {block_id: mensaje} con los campos inválidos (vacío si todo OK)."""
+    errores = {}
+    for block_id, tipo in specs:
+        try:
+            valor = valores[block_id]["valor"]["value"]
+        except (KeyError, TypeError):
+            valor = ""
+        ok, msg = _VALIDADORES[tipo](valor)
+        if not ok:
+            errores[block_id] = msg
+    return errores
+# ============ FIN VALIDACIÓN DE DATOS ============
+
+
 @app.command("/contactar")
 def reportar_contacto(ack, body, client):
     ack()
@@ -147,6 +220,11 @@ def reportar_contacto(ack, body, client):
 
 @app.view("form_contactar")
 def recibir_contacto(ack, body, client):
+    _v = body["view"]["state"]["values"]
+    _err = _validar_view(_v, [('cedula', 'cedula'), ('telefono', 'telefono'), ('compromiso', 'fecha')])
+    if _err:
+        ack(response_action="errors", errors=_err)
+        return
     ack()
     valores = body["view"]["state"]["values"]
     nombre = valores["nombre"]["valor"]["value"]
@@ -260,6 +338,11 @@ def reportar_cobro(ack, body, client):
 
 @app.view("form_cobro")
 def recibir_cobro(ack, body, client):
+    _v = body["view"]["state"]["values"]
+    _err = _validar_view(_v, [('cedula', 'cedula')])
+    if _err:
+        ack(response_action="errors", errors=_err)
+        return
     ack()
     valores = body["view"]["state"]["values"]
     nombre_cobrador = valores["nombre_cobrador"]["valor"]["value"]
@@ -619,6 +702,11 @@ def reportar_cobro2(ack, body, client):
 
 @app.view("form_cobro2")
 def recibir_cobro2(ack, body, client):
+    _v = body["view"]["state"]["values"]
+    _err = _validar_view(_v, [('cedula', 'cedula'), ('telefono', 'telefono')])
+    if _err:
+        ack(response_action="errors", errors=_err)
+        return
     ack()
     valores = body["view"]["state"]["values"]
     nombre = valores["nombre"]["valor"]["value"]
@@ -806,6 +894,11 @@ def reportar_conciliacion(ack, body, client):
 
 @app.view("form_conciliar")
 def recibir_conciliacion(ack, body, client):
+    _v = body["view"]["state"]["values"]
+    _err = _validar_view(_v, [('cedula', 'cedula'), ('fecha_movimiento', 'fecha')])
+    if _err:
+        ack(response_action="errors", errors=_err)
+        return
     ack()
     valores = body["view"]["state"]["values"]
     cliente_nombre = valores["cliente"]["valor"]["value"]
@@ -1019,6 +1112,11 @@ def reportar_liquidacion_nueva(ack, body, client):
 
 @app.view("form_liquidacion_nueva")
 def recibir_liquidacion_nueva(ack, body, client):
+    _v = body["view"]["state"]["values"]
+    _err = _validar_view(_v, [('cedula', 'cedula')])
+    if _err:
+        ack(response_action="errors", errors=_err)
+        return
     ack()
     valores = body["view"]["state"]["values"]
     nombre = valores["nombre"]["valor"]["value"]
@@ -1123,6 +1221,11 @@ def reportar_liquidacion_estatus(ack, body, client):
 
 @app.view("form_liquidacion_estatus")
 def recibir_liquidacion_estatus(ack, body, client):
+    _v = body["view"]["state"]["values"]
+    _err = _validar_view(_v, [('cedula', 'cedula')])
+    if _err:
+        ack(response_action="errors", errors=_err)
+        return
     ack()
     valores = body["view"]["state"]["values"]
     cedula = valores["cedula"]["valor"]["value"]
@@ -1280,6 +1383,11 @@ def reportar_cobro_comercial(ack, body, client):
 
 @app.view("form_cobro_comercial")
 def recibir_cobro_comercial(ack, body, client):
+    _v = body["view"]["state"]["values"]
+    _err = _validar_view(_v, [('cedula', 'cedula'), ('telefono', 'telefono')])
+    if _err:
+        ack(response_action="errors", errors=_err)
+        return
     ack()
     valores = body["view"]["state"]["values"]
     nombre = valores["nombre"]["valor"]["value"]
@@ -1448,6 +1556,11 @@ def reportar_contacto_legal(ack, body, client):
 
 @app.view("form_contacto_legal")
 def recibir_contacto_legal(ack, body, client):
+    _v = body["view"]["state"]["values"]
+    _err = _validar_view(_v, [('cedula', 'cedula'), ('telefono', 'telefono'), ('compromiso', 'fecha')])
+    if _err:
+        ack(response_action="errors", errors=_err)
+        return
     ack()
     valores = body["view"]["state"]["values"]
     nombre = valores["nombre"]["valor"]["value"]
@@ -1651,6 +1764,11 @@ def reportar_cliente_escalado(ack, body, client):
 
 @app.view("form_cliente_escalado")
 def recibir_cliente_escalado(ack, body, client):
+    _v = body["view"]["state"]["values"]
+    _err = _validar_view(_v, [('cedula', 'cedula'), ('telefono', 'telefono')])
+    if _err:
+        ack(response_action="errors", errors=_err)
+        return
     ack()
     valores = body["view"]["state"]["values"]
     nombre = valores["nombre"]["valor"]["value"]
