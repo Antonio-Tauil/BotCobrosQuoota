@@ -2213,11 +2213,97 @@ def promesa_fallida(ack, body, client):
     _comando_marcar(ack, body, client, "Fallida", "❌")
 # ============ FIN FASE 2 ============
 
+
+# ============ CIERRE DIARIO DE COBROS (reporte automático 6 PM) ============
+CANAL_CIERRE = "#cobranzas-log"
+
+
+def generar_cierre_diario():
+    """Lee 'Pagos Recibidos', suma los cobros de HOY y publica el cierre del día."""
+    try:
+        cliente = get_cliente_busqueda()
+        spreadsheet = cliente.open_by_key(os.environ["SHEET_ID"])
+        try:
+            hoja = spreadsheet.worksheet("Pagos Recibidos")
+        except Exception:
+            print("❌ Cierre: no se encontró la hoja 'Pagos Recibidos'")
+            return
+        valores = hoja.get_all_values()
+        hoy_txt = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y")
+
+        # Columnas (0-based): 0 fecha, 4 monto_bs, 7 monto_usd, 9 cobrador
+        total_usd = 0.0
+        total_bs = 0.0
+        cantidad = 0
+        por_cobrador = {}  # nombre -> {"n": x, "usd": x, "bs": x}
+
+        for i, fila in enumerate(valores):
+            if i == 0:
+                continue
+
+            def celda(idx):
+                return fila[idx].strip() if len(fila) > idx else ""
+
+            fecha_celda = celda(0).split()[0] if celda(0) else ""  # quita hora si la hubiera
+            if fecha_celda != hoy_txt:
+                continue
+
+            cantidad += 1
+            cobrador = celda(9) or "Sin cobrador"
+
+            try:
+                usd = parse_numero(celda(7))
+            except (ValueError, ZeroDivisionError):
+                usd = 0.0
+            try:
+                bs = parse_numero(celda(4))
+            except (ValueError, ZeroDivisionError):
+                bs = 0.0
+
+            total_usd += usd
+            total_bs += bs
+            g = por_cobrador.setdefault(cobrador, {"n": 0, "usd": 0.0, "bs": 0.0})
+            g["n"] += 1
+            g["usd"] += usd
+            g["bs"] += bs
+
+        # Armar el mensaje
+        lineas = [f"📊 *CIERRE DEL DÍA — {hoy_txt}*", ""]
+        if cantidad == 0:
+            lineas.append("No se registraron cobros hoy.")
+        else:
+            lineas.append(f"💰 *Total cobrado:* Bs. {total_bs:,.2f}  ·  ${total_usd:,.2f}")
+            lineas.append(f"📝 *Cantidad de cobros:* {cantidad}")
+            lineas.append("")
+            lineas.append("*Por cobrador:*")
+            for cobrador in sorted(por_cobrador.keys(), key=lambda x: por_cobrador[x]["usd"], reverse=True):
+                g = por_cobrador[cobrador]
+                lineas.append(f"   • {cobrador} — {g['n']} cobro(s) — ${g['usd']:,.2f}")
+
+        mensaje = "\n".join(lineas)
+        app.client.chat_postMessage(channel=CANAL_CIERRE, text=mensaje)
+        print(f"✅ Cierre diario publicado: {cantidad} cobros, ${total_usd:,.2f}")
+    except Exception as e:
+        print(f"❌ Error generando el cierre diario: {type(e).__name__}: {e}")
+
+
+# Comando manual para probar el cierre sin esperar las 6 PM
+@app.command("/probar-cierre")
+def probar_cierre(ack, body, client):
+    ack()
+    client.chat_postEphemeral(
+        channel=body["channel_id"], user=body["user_id"],
+        text="⏳ Generando el cierre del día ahora mismo... revisa el canal #cobranzas-log."
+    )
+    generar_cierre_diario()
+# ============ FIN CIERRE DIARIO DE COBROS ============
+
 if __name__ == "__main__":
     print("🤖 Robotín está despierto y conectándose a Slack...")
     # Programar el Radar de Promesas todos los días a las 4:00 PM (hora Venezuela)
     scheduler = BackgroundScheduler(timezone=ZoneInfo("America/Caracas"))
     scheduler.add_job(generar_resumen_promesas, "cron", hour=16, minute=0)
+    scheduler.add_job(generar_cierre_diario, "cron", hour=18, minute=0)
     scheduler.start()
     print("⏰ Scheduler del Radar de Promesas activo (4:00 PM Venezuela).")
     SocketModeHandler(app, os.environ["SLACK_APP_TOKEN"]).start()
