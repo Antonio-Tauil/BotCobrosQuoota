@@ -360,7 +360,7 @@ def recibir_cobro(ack, body, client):
     forma_pago = valores["forma_pago"]["valor"]["selected_option"]["value"]
     banco = valores["banco"]["valor"]["selected_option"]["value"]
     tasa_bcv_num = _tasa_num
-    tasa_bcv_str = f"{tasa_bcv_num:,.2f}"
+    tasa_bcv_str = f"{tasa_bcv_num:,.4f}"
     cobrador_slack = body["user"]["id"]
     fecha = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y")
     try:
@@ -2519,7 +2519,7 @@ def tasa_hoy(ack, body, client):
     # Blindaje de rango: atrapa 0, negativos y valores absurdos por tipeo
     if valor_num < TASA_MIN or valor_num > TASA_MAX:
         client.chat_postEphemeral(channel=canal, user=usuario,
-            text=f"⚠️ La tasa *{valor_num:,.2f}* parece un error de tipeo (fuera de un rango razonable). Revisa y vuelve a intentar. Ejemplo: `/tasa-hoy 520,50`.")
+            text=f"⚠️ La tasa *{valor_num:,.4f}* parece un error de tipeo (fuera de un rango razonable). Revisa y vuelve a intentar. Ejemplo: `/tasa-hoy 520,50`.")
         return
 
     # Aviso si cambia demasiado respecto a la tasa anterior (posible tipeo tipo 52050)
@@ -2531,7 +2531,7 @@ def tasa_hoy(ack, body, client):
             if ant and ant > 0:
                 cambio = abs(valor_num - ant) / ant
                 if cambio > TASA_CAMBIO_ALERTA:
-                    aviso_cambio = (f"\n\n⚠️ *Ojo:* la tasa anterior era Bs. {ant:,.2f} y ahora pusiste Bs. {valor_num:,.2f} "
+                    aviso_cambio = (f"\n\n⚠️ *Ojo:* la tasa anterior era Bs. {ant:,.4f} y ahora pusiste Bs. {valor_num:,.4f} "
                                     f"(un cambio grande). Si fue un error, vuelve a ponerla correcta.")
     except Exception:
         pass  # el aviso es opcional, no debe romper nada
@@ -2544,11 +2544,11 @@ def tasa_hoy(ack, body, client):
     hoy_txt = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y")
     try:
         client.chat_postMessage(channel="#cobranzas-log",
-            text=f"💱 <@{usuario}> fijó la *tasa del día*: Bs. {valor_num:,.2f} por USD ({hoy_txt}). Ya pueden reportar cobros.")
+            text=f"💱 <@{usuario}> fijó la *tasa del día*: Bs. {valor_num:,.4f} por USD ({hoy_txt}). Ya pueden reportar cobros.")
     except Exception as e:
         print(f"⚠️ No se pudo avisar la tasa en el canal: {e}")
     client.chat_postEphemeral(channel=canal, user=usuario,
-        text=f"✅ Tasa del día fijada: Bs. {valor_num:,.2f} por USD.{aviso_cambio}")
+        text=f"✅ Tasa del día fijada: Bs. {valor_num:,.4f} por USD.{aviso_cambio}")
 # ============ FIN TASA DEL DÍA ============
 
 if __name__ == "__main__":
