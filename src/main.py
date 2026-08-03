@@ -2308,6 +2308,108 @@ def probar_cierre(ack, body, client):
     generar_cierre_diario()
 # ============ FIN CIERRE DIARIO DE COBROS ============
 
+
+# ============ COMANDO /mis-promesas (cada cobrador ve las suyas) ============
+def _cobrador_por_slack_id(user_id):
+    """Busca a qué nombre de cobrador corresponde el usuario de Slack que escribe."""
+    for nombre, ids in COBRADOR_SLACK_IDS.items():
+        if user_id in ids:
+            return nombre
+    return None
+
+
+@app.command("/mis-promesas")
+def mis_promesas(ack, body, client):
+    ack()
+    canal = body["channel_id"]
+    usuario = body["user_id"]
+
+    nombre_cobrador = _cobrador_por_slack_id(usuario)
+    if not nombre_cobrador:
+        client.chat_postEphemeral(
+            channel=canal, user=usuario,
+            text="No te reconozco como cobrador en la lista. Pídele al administrador que agregue tu ID de Slack a la tabla de cobradores."
+        )
+        return
+
+    try:
+        cliente = get_cliente_busqueda()
+        spreadsheet = cliente.open_by_key(os.environ["SHEET_ID"])
+        hoja = None
+        for ws in spreadsheet.worksheets():
+            if ws.title.strip().lower() == "contactados":
+                hoja = ws
+                break
+        if hoja is None:
+            client.chat_postEphemeral(channel=canal, user=usuario,
+                text="❌ No encontré la hoja 'Contactados'.")
+            return
+        valores = hoja.get_all_values()
+    except Exception as e:
+        client.chat_postEphemeral(channel=canal, user=usuario,
+            text=f"❌ Error al leer las promesas: {type(e).__name__}: {e}")
+        return
+
+    hoy = datetime.now(ZoneInfo("America/Caracas")).date()
+    objetivo = nombre_cobrador.strip().upper()
+    de_hoy = []
+    vencidas = []
+    vistas = set()
+
+    for i, fila in enumerate(valores):
+        if i == 0:
+            continue
+
+        def celda(idx):
+            return fila[idx].strip() if len(fila) > idx else ""
+
+        # Columna F (5) = Cobrador
+        if celda(5).strip().upper() != objetivo:
+            continue
+        # Columna H (7) = Estado promesa (si tiene, ya está resuelta)
+        if celda(7):
+            continue
+        # Columna E (4) = Compromiso de pago
+        f, _motivo = _parsear_fecha_radar(celda(4), hoy)
+        if f is None:
+            continue
+        ced = _solo_digitos(celda(3))
+        if ced and ced in vistas:
+            continue
+        if ced:
+            vistas.add(ced)
+        item = {"nombre": celda(1) or "(sin nombre)", "cedula": celda(3), "fecha": f}
+        if f == hoy:
+            de_hoy.append(item)
+        elif f < hoy:
+            vencidas.append(item)
+
+    # Armar el mensaje
+    lineas = [f"📋 *Tus promesas pendientes — {nombre_cobrador}*", ""]
+    if not de_hoy and not vencidas:
+        lineas.append("✅ No tienes promesas pendientes ni vencidas. ¡Estás al día!")
+    else:
+        if de_hoy:
+            lineas.append(f"☀️ *Para hoy ({len(de_hoy)}):*")
+            for it in de_hoy:
+                ced = f" · {it['cedula']}" if it["cedula"] else ""
+                lineas.append(f"   • {it['nombre']}{ced}")
+            lineas.append("")
+        if vencidas:
+            vencidas.sort(key=lambda x: x["fecha"], reverse=True)
+            total_v = len(vencidas)
+            lineas.append(f"⏰ *Vencidas ({total_v}):*")
+            for it in vencidas[:15]:
+                ced = f" · {it['cedula']}" if it["cedula"] else ""
+                dias = (hoy - it["fecha"]).days
+                alerta = " 🔴" if dias >= 3 else ""
+                lineas.append(f"   • {it['nombre']}{ced} — hace {dias}d{alerta}")
+            if total_v > 15:
+                lineas.append(f"   … y {total_v - 15} vencida(s) más")
+
+    client.chat_postEphemeral(channel=canal, user=usuario, text="\n".join(lineas).strip())
+# ============ FIN COMANDO /mis-promesas ============
+
 if __name__ == "__main__":
     print("🤖 Robotín está despierto y conectándose a Slack...")
     # Programar el Radar de Promesas todos los días a las 4:00 PM (hora Venezuela)
