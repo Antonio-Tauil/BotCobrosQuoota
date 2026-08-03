@@ -334,10 +334,7 @@ def reportar_cobro(ack, body, client):
                                  {"text": {"type": "plain_text", "text": "Bicentenario"}, "value": "Bicentenario"},
                                  {"text": {"type": "plain_text", "text": "Banesco"}, "value": "Banesco"},
                                  {"text": {"type": "plain_text", "text": "Otro"}, "value": "Otro"}
-                             ]}},
-                {"type": "input", "block_id": "tasa_bcv",
-                 "label": {"type": "plain_text", "text": "Tasa BCV (Bs por USD)"},
-                 "element": {"type": "plain_text_input", "action_id": "valor"}}
+                             ]}}
             ]
         }
     )
@@ -347,6 +344,9 @@ def reportar_cobro(ack, body, client):
 def recibir_cobro(ack, body, client):
     _v = body["view"]["state"]["values"]
     _err = _validar_view(_v, [('cedula', 'cedula')])
+    _tasa_num = _tasa_de_hoy()
+    if _tasa_num is None:
+        _err["monto_bs"] = "⚠️ Falta la tasa de hoy. Pide que pongan /tasa-hoy [valor] antes de reportar cobros."
     if _err:
         ack(response_action="errors", errors=_err)
         return
@@ -359,12 +359,12 @@ def recibir_cobro(ack, body, client):
     monto_bs_str = valores["monto_bs"]["valor"]["value"]
     forma_pago = valores["forma_pago"]["valor"]["selected_option"]["value"]
     banco = valores["banco"]["valor"]["selected_option"]["value"]
-    tasa_bcv_str = valores["tasa_bcv"]["valor"]["value"]
+    tasa_bcv_num = _tasa_num
+    tasa_bcv_str = f"{tasa_bcv_num:,.2f}"
     cobrador_slack = body["user"]["id"]
     fecha = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y")
     try:
         monto_bs_num = parse_numero(monto_bs_str)
-        tasa_bcv_num = parse_numero(tasa_bcv_str)
         monto_usd_str = f"${monto_bs_num/tasa_bcv_num:,.2f}"
         monto_bs_fmt = f"Bs. {monto_bs_num:,.2f}"
     except (ValueError, ZeroDivisionError):
@@ -2409,6 +2409,105 @@ def mis_promesas(ack, body, client):
 
     client.chat_postEphemeral(channel=canal, user=usuario, text="\n".join(lineas).strip())
 # ============ FIN COMANDO /mis-promesas ============
+
+
+# ============ TASA DEL DÍA (una vez al día) ============
+# Se guarda en la pestaña "Indicadores": A20=etiqueta, B20=valor, C20=fecha
+FILA_TASA = 20
+
+
+def _abrir_indicadores():
+    cliente = get_cliente_busqueda()
+    spreadsheet = cliente.open_by_key(os.environ["SHEET_ID"])
+    for ws in spreadsheet.worksheets():
+        if ws.title.strip().lower() == "indicadores":
+            return ws
+    return None
+
+
+def _guardar_tasa_dia(valor_num):
+    ws = _abrir_indicadores()
+    if ws is None:
+        return False
+    hoy_txt = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y")
+    ws.update_cell(FILA_TASA, 1, "Tasa del día")
+    ws.update_cell(FILA_TASA, 2, str(valor_num))
+    ws.update_cell(FILA_TASA, 3, hoy_txt)
+    return True
+
+
+def _leer_tasa_dia():
+    """Devuelve (valor_str, fecha_str) o (None, None)."""
+    ws = _abrir_indicadores()
+    if ws is None:
+        return None, None
+    try:
+        valor = ws.cell(FILA_TASA, 2).value
+        fecha = ws.cell(FILA_TASA, 3).value
+        return valor, fecha
+    except Exception as e:
+        print(f"⚠️ Error leyendo la tasa: {e}")
+        return None, None
+
+
+def _tasa_de_hoy():
+    """Devuelve el número de la tasa SOLO si es de hoy; si no, None."""
+    valor, fecha = _leer_tasa_dia()
+    if not valor or not fecha:
+        return None
+    hoy_txt = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y")
+    if str(fecha).strip().split()[0] != hoy_txt:
+        return None
+    try:
+        return parse_numero(valor)
+    except (ValueError, ZeroDivisionError):
+        return None
+
+
+@app.command("/tasa-hoy")
+def tasa_hoy(ack, body, client):
+    ack()
+    texto = (body.get("text") or "").strip()
+    canal = body["channel_id"]
+    usuario = body["user_id"]
+
+    # Sin número: consultar la tasa actual
+    if not texto:
+        valor, fecha = _leer_tasa_dia()
+        if not valor:
+            client.chat_postEphemeral(channel=canal, user=usuario,
+                text="No hay tasa registrada aún. Fíjala con `/tasa-hoy 520,50`.")
+        else:
+            hoy_txt = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y")
+            vigente = "✅ (es de hoy)" if str(fecha).strip().split()[0] == hoy_txt else "⚠️ (NO es de hoy, ponla de nuevo)"
+            client.chat_postEphemeral(channel=canal, user=usuario,
+                text=f"La tasa registrada es *Bs. {valor}* por USD (puesta el {fecha}) {vigente}.")
+        return
+
+    # Con número: fijar la tasa
+    try:
+        valor_num = parse_numero(texto)
+        if valor_num <= 0:
+            raise ValueError()
+    except (ValueError, ZeroDivisionError):
+        client.chat_postEphemeral(channel=canal, user=usuario,
+            text=f"'{texto}' no es una tasa válida. Ejemplo: `/tasa-hoy 520,50`.")
+        return
+
+    if not _guardar_tasa_dia(valor_num):
+        client.chat_postEphemeral(channel=canal, user=usuario,
+            text="❌ No encontré la hoja 'Indicadores' para guardar la tasa.")
+        return
+
+    hoy_txt = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y")
+    try:
+        client.chat_postMessage(channel="#cobranzas-log",
+            text=f"💱 <@{usuario}> fijó la *tasa del día*: Bs. {valor_num:,.2f} por USD ({hoy_txt}). Ya pueden reportar cobros.")
+    except Exception as e:
+        print(f"⚠️ No se pudo avisar la tasa en el canal: {e}")
+    client.chat_postEphemeral(channel=canal, user=usuario,
+        text=f"✅ Tasa del día fijada: Bs. {valor_num:,.2f} por USD.")
+# ============ FIN TASA DEL DÍA ============
 
 if __name__ == "__main__":
     print("🤖 Robotín está despierto y conectándose a Slack...")
