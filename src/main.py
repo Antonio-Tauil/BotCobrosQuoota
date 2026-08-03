@@ -295,7 +295,9 @@ def reportar_cobro(ack, body, client):
             "blocks": [
                 {"type": "input", "block_id": "nombre_cobrador",
                  "label": {"type": "plain_text", "text": "Nombre del Cobrador"},
-                 "element": {"type": "plain_text_input", "action_id": "valor"}},
+                 "element": {"type": "static_select", "action_id": "valor",
+                             "placeholder": {"type": "plain_text", "text": "Selecciona"},
+                             "options": _opciones_cobradores()}},
                 {"type": "input", "block_id": "descripcion",
                  "label": {"type": "plain_text", "text": "Nombre del Cliente"},
                  "element": {"type": "plain_text_input", "action_id": "valor"}},
@@ -350,7 +352,7 @@ def recibir_cobro(ack, body, client):
         return
     ack()
     valores = body["view"]["state"]["values"]
-    nombre_cobrador = valores["nombre_cobrador"]["valor"]["value"]
+    nombre_cobrador = valores["nombre_cobrador"]["valor"]["selected_option"]["value"]
     descripcion = valores["descripcion"]["valor"]["value"]
     cedula = valores["cedula"]["valor"]["value"]
     numero = valores["numero"]["valor"]["value"]
