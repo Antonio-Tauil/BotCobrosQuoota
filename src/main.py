@@ -2411,33 +2411,46 @@ def mis_promesas(ack, body, client):
 # ============ FIN COMANDO /mis-promesas ============
 
 
-# ============ TASA DEL DÍA (una vez al día) ============
+# ============ TASA DEL DÍA (una vez al día) — BLINDADO ============
 # Se guarda en la pestaña "Indicadores": A20=etiqueta, B20=valor, C20=fecha
 FILA_TASA = 20
+TASA_MIN = 1            # una tasa por debajo de 1 Bs/USD es imposible
+TASA_MAX = 100_000_000  # tope de seguridad para atrapar tipeos absurdos
+TASA_CAMBIO_ALERTA = 0.5  # avisa si la nueva tasa cambia más de 50% vs la anterior
 
 
 def _abrir_indicadores():
-    cliente = get_cliente_busqueda()
-    spreadsheet = cliente.open_by_key(os.environ["SHEET_ID"])
-    for ws in spreadsheet.worksheets():
-        if ws.title.strip().lower() == "indicadores":
-            return ws
-    return None
+    """Abre la hoja 'Indicadores'. Devuelve None si hay cualquier problema (nunca lanza error)."""
+    try:
+        cliente = get_cliente_busqueda()
+        spreadsheet = cliente.open_by_key(os.environ["SHEET_ID"])
+        for ws in spreadsheet.worksheets():
+            if ws.title.strip().lower() == "indicadores":
+                return ws
+        print("⚠️ Tasa: no se encontró la hoja 'Indicadores'")
+        return None
+    except Exception as e:
+        print(f"⚠️ Tasa: error abriendo 'Indicadores': {type(e).__name__}: {e}")
+        return None
 
 
 def _guardar_tasa_dia(valor_num):
+    """Guarda la tasa (etiqueta + valor + fecha) en una sola operación. Devuelve True/False."""
     ws = _abrir_indicadores()
     if ws is None:
         return False
     hoy_txt = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y")
-    ws.update_cell(FILA_TASA, 1, "Tasa del día")
-    ws.update_cell(FILA_TASA, 2, str(valor_num))
-    ws.update_cell(FILA_TASA, 3, hoy_txt)
-    return True
+    try:
+        # Una sola escritura (A20:C20) para evitar quedar a medias
+        ws.update(f"A{FILA_TASA}:C{FILA_TASA}", [["Tasa del día", str(valor_num), hoy_txt]])
+        return True
+    except Exception as e:
+        print(f"❌ Tasa: error guardando: {type(e).__name__}: {e}")
+        return False
 
 
 def _leer_tasa_dia():
-    """Devuelve (valor_str, fecha_str) o (None, None)."""
+    """Devuelve (valor_str, fecha_str) o (None, None). Nunca lanza error."""
     ws = _abrir_indicadores()
     if ws is None:
         return None, None
@@ -2446,21 +2459,25 @@ def _leer_tasa_dia():
         fecha = ws.cell(FILA_TASA, 3).value
         return valor, fecha
     except Exception as e:
-        print(f"⚠️ Error leyendo la tasa: {e}")
+        print(f"⚠️ Tasa: error leyendo: {type(e).__name__}: {e}")
         return None, None
 
 
 def _tasa_de_hoy():
-    """Devuelve el número de la tasa SOLO si es de hoy; si no, None."""
-    valor, fecha = _leer_tasa_dia()
-    if not valor or not fecha:
-        return None
-    hoy_txt = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y")
-    if str(fecha).strip().split()[0] != hoy_txt:
-        return None
+    """Devuelve el número de la tasa SOLO si es de hoy y válida; si no, None. Nunca lanza error."""
     try:
-        return parse_numero(valor)
-    except (ValueError, ZeroDivisionError):
+        valor, fecha = _leer_tasa_dia()
+        if not valor or not fecha:
+            return None
+        hoy_txt = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y")
+        if str(fecha).strip().split()[0] != hoy_txt:
+            return None
+        num = parse_numero(valor)
+        if num is None or num < TASA_MIN or num > TASA_MAX:
+            return None
+        return num
+    except Exception as e:
+        print(f"⚠️ Tasa: error en _tasa_de_hoy: {type(e).__name__}: {e}")
         return None
 
 
@@ -2471,32 +2488,57 @@ def tasa_hoy(ack, body, client):
     canal = body["channel_id"]
     usuario = body["user_id"]
 
-    # Sin número: consultar la tasa actual
+    # ---- Sin número: consultar la tasa actual ----
     if not texto:
-        valor, fecha = _leer_tasa_dia()
-        if not valor:
+        try:
+            valor, fecha = _leer_tasa_dia()
+            if not valor:
+                client.chat_postEphemeral(channel=canal, user=usuario,
+                    text="No hay tasa registrada aún. Fíjala con `/tasa-hoy 520,50`.")
+            else:
+                hoy_txt = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y")
+                vigente = "✅ (es de hoy)" if str(fecha).strip().split()[0] == hoy_txt else "⚠️ (NO es de hoy, hay que ponerla de nuevo)"
+                client.chat_postEphemeral(channel=canal, user=usuario,
+                    text=f"La tasa registrada es *Bs. {valor}* por USD (puesta el {fecha}) {vigente}.")
+        except Exception as e:
             client.chat_postEphemeral(channel=canal, user=usuario,
-                text="No hay tasa registrada aún. Fíjala con `/tasa-hoy 520,50`.")
-        else:
-            hoy_txt = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y")
-            vigente = "✅ (es de hoy)" if str(fecha).strip().split()[0] == hoy_txt else "⚠️ (NO es de hoy, ponla de nuevo)"
-            client.chat_postEphemeral(channel=canal, user=usuario,
-                text=f"La tasa registrada es *Bs. {valor}* por USD (puesta el {fecha}) {vigente}.")
+                text=f"❌ No pude leer la tasa ahora mismo. Intenta de nuevo en un momento.")
+            print(f"❌ /tasa-hoy consulta: {type(e).__name__}: {e}")
         return
 
-    # Con número: fijar la tasa
+    # ---- Con número: fijar la tasa ----
+    # Tomar solo el primer "pedazo" para evitar que "520 50" se junte en 52050
+    primer = texto.split()[0]
     try:
-        valor_num = parse_numero(texto)
-        if valor_num <= 0:
-            raise ValueError()
-    except (ValueError, ZeroDivisionError):
+        valor_num = parse_numero(primer)
+    except (ValueError, ZeroDivisionError, TypeError):
         client.chat_postEphemeral(channel=canal, user=usuario,
             text=f"'{texto}' no es una tasa válida. Ejemplo: `/tasa-hoy 520,50`.")
         return
 
+    # Blindaje de rango: atrapa 0, negativos y valores absurdos por tipeo
+    if valor_num < TASA_MIN or valor_num > TASA_MAX:
+        client.chat_postEphemeral(channel=canal, user=usuario,
+            text=f"⚠️ La tasa *{valor_num:,.2f}* parece un error de tipeo (fuera de un rango razonable). Revisa y vuelve a intentar. Ejemplo: `/tasa-hoy 520,50`.")
+        return
+
+    # Aviso si cambia demasiado respecto a la tasa anterior (posible tipeo tipo 52050)
+    aviso_cambio = ""
+    try:
+        valor_ant, _fecha_ant = _leer_tasa_dia()
+        if valor_ant:
+            ant = parse_numero(valor_ant)
+            if ant and ant > 0:
+                cambio = abs(valor_num - ant) / ant
+                if cambio > TASA_CAMBIO_ALERTA:
+                    aviso_cambio = (f"\n\n⚠️ *Ojo:* la tasa anterior era Bs. {ant:,.2f} y ahora pusiste Bs. {valor_num:,.2f} "
+                                    f"(un cambio grande). Si fue un error, vuelve a ponerla correcta.")
+    except Exception:
+        pass  # el aviso es opcional, no debe romper nada
+
     if not _guardar_tasa_dia(valor_num):
         client.chat_postEphemeral(channel=canal, user=usuario,
-            text="❌ No encontré la hoja 'Indicadores' para guardar la tasa.")
+            text="❌ No pude guardar la tasa (revisa que exista la hoja 'Indicadores'). Intenta de nuevo.")
         return
 
     hoy_txt = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y")
@@ -2506,7 +2548,7 @@ def tasa_hoy(ack, body, client):
     except Exception as e:
         print(f"⚠️ No se pudo avisar la tasa en el canal: {e}")
     client.chat_postEphemeral(channel=canal, user=usuario,
-        text=f"✅ Tasa del día fijada: Bs. {valor_num:,.2f} por USD.")
+        text=f"✅ Tasa del día fijada: Bs. {valor_num:,.2f} por USD.{aviso_cambio}")
 # ============ FIN TASA DEL DÍA ============
 
 if __name__ == "__main__":
