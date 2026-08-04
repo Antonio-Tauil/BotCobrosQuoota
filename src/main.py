@@ -2309,13 +2309,36 @@ def probar_cierre(ack, body, client):
 # ============ FIN CIERRE DIARIO DE COBROS ============
 
 
-# ============ COMANDO /mis-promesas (cada cobrador ve las suyas) ============
+# ============ COMANDO /mis-promesas (con botones para marcar) ============
+MIS_PROMESAS_LIMITE = 15  # cuántas promesas mostrar con botones a la vez
+
+
 def _cobrador_por_slack_id(user_id):
     """Busca a qué nombre de cobrador corresponde el usuario de Slack que escribe."""
     for nombre, ids in COBRADOR_SLACK_IDS.items():
         if user_id in ids:
             return nombre
     return None
+
+
+def _boton_marcar(cedula, nombre, estado):
+    """Crea un botón con confirmación nativa para marcar una promesa."""
+    emoji = "✅" if estado == "Cumplida" else "❌"
+    estilo = "primary" if estado == "Cumplida" else "danger"
+    valor = json.dumps({"c": cedula, "e": estado, "n": nombre[:60]})
+    return {
+        "type": "button",
+        "text": {"type": "plain_text", "text": f"{emoji} {estado}"},
+        "style": estilo,
+        "action_id": f"marcar_{estado.lower()}_btn",
+        "value": valor,
+        "confirm": {
+            "title": {"type": "plain_text", "text": "¿Confirmar?"},
+            "text": {"type": "mrkdwn", "text": f"Marcar la promesa de *{nombre}* (cédula {cedula}) como *{estado}*?"},
+            "confirm": {"type": "plain_text", "text": "Sí, marcar"},
+            "deny": {"type": "plain_text", "text": "Cancelar"}
+        }
+    }
 
 
 @app.command("/mis-promesas")
@@ -2326,10 +2349,8 @@ def mis_promesas(ack, body, client):
 
     nombre_cobrador = _cobrador_por_slack_id(usuario)
     if not nombre_cobrador:
-        client.chat_postEphemeral(
-            channel=canal, user=usuario,
-            text="No te reconozco como cobrador en la lista. Pídele al administrador que agregue tu ID de Slack a la tabla de cobradores."
-        )
+        client.chat_postEphemeral(channel=canal, user=usuario,
+            text="No te reconozco como cobrador en la lista. Pídele al administrador que agregue tu ID de Slack.")
         return
 
     try:
@@ -2341,8 +2362,7 @@ def mis_promesas(ack, body, client):
                 hoja = ws
                 break
         if hoja is None:
-            client.chat_postEphemeral(channel=canal, user=usuario,
-                text="❌ No encontré la hoja 'Contactados'.")
+            client.chat_postEphemeral(channel=canal, user=usuario, text="❌ No encontré la hoja 'Contactados'.")
             return
         valores = hoja.get_all_values()
     except Exception as e:
@@ -2363,13 +2383,10 @@ def mis_promesas(ack, body, client):
         def celda(idx):
             return fila[idx].strip() if len(fila) > idx else ""
 
-        # Columna F (5) = Cobrador
         if celda(5).strip().upper() != objetivo:
             continue
-        # Columna H (7) = Estado promesa (si tiene, ya está resuelta)
-        if celda(7):
+        if celda(7):  # ya tiene estado
             continue
-        # Columna E (4) = Compromiso de pago
         f, _motivo = _parsear_fecha_radar(celda(4), hoy)
         if f is None:
             continue
@@ -2384,30 +2401,95 @@ def mis_promesas(ack, body, client):
         elif f < hoy:
             vencidas.append(item)
 
-    # Armar el mensaje
-    lineas = [f"📋 *Tus promesas pendientes — {nombre_cobrador}*", ""]
-    if not de_hoy and not vencidas:
-        lineas.append("✅ No tienes promesas pendientes ni vencidas. ¡Estás al día!")
-    else:
-        if de_hoy:
-            lineas.append(f"☀️ *Para hoy ({len(de_hoy)}):*")
-            for it in de_hoy:
-                ced = f" · {it['cedula']}" if it["cedula"] else ""
-                lineas.append(f"   • {it['nombre']}{ced}")
-            lineas.append("")
-        if vencidas:
-            vencidas.sort(key=lambda x: x["fecha"], reverse=True)
-            total_v = len(vencidas)
-            lineas.append(f"⏰ *Vencidas ({total_v}):*")
-            for it in vencidas[:15]:
-                ced = f" · {it['cedula']}" if it["cedula"] else ""
-                dias = (hoy - it["fecha"]).days
-                alerta = " 🔴" if dias >= 3 else ""
-                lineas.append(f"   • {it['nombre']}{ced} — hace {dias}d{alerta}")
-            if total_v > 15:
-                lineas.append(f"   … y {total_v - 15} vencida(s) más")
+    total = len(de_hoy) + len(vencidas)
+    if total == 0:
+        client.chat_postEphemeral(channel=canal, user=usuario,
+            text=f"✅ *{nombre_cobrador}*, no tienes promesas pendientes ni vencidas. ¡Estás al día!")
+        return
 
-    client.chat_postEphemeral(channel=canal, user=usuario, text="\n".join(lineas).strip())
+    # Ordenar vencidas: más recientes primero
+    vencidas.sort(key=lambda x: x["fecha"], reverse=True)
+    # Combinar: primero las de hoy, luego vencidas
+    lista = [("hoy", it) for it in de_hoy] + [("venc", it) for it in vencidas]
+
+    bloques = [{
+        "type": "section",
+        "text": {"type": "mrkdwn", "text": f"📋 *Tus promesas pendientes — {nombre_cobrador}* ({total})\nMarca cada una con los botones. Se te pedirá confirmar."}
+    }, {"type": "divider"}]
+
+    mostradas = 0
+    for tipo, it in lista:
+        if mostradas >= MIS_PROMESAS_LIMITE:
+            break
+        ced = f" · {it['cedula']}" if it["cedula"] else ""
+        if tipo == "hoy":
+            etiqueta = "☀️ hoy"
+        else:
+            dias = (hoy - it["fecha"]).days
+            alerta = " 🔴" if dias >= 3 else ""
+            etiqueta = f"⏰ hace {dias}d{alerta}"
+        bloques.append({
+            "type": "section",
+            "text": {"type": "mrkdwn", "text": f"• *{it['nombre']}*{ced} — {etiqueta}"}
+        })
+        bloques.append({
+            "type": "actions",
+            "elements": [
+                _boton_marcar(it["cedula"], it["nombre"], "Cumplida"),
+                _boton_marcar(it["cedula"], it["nombre"], "Fallida"),
+            ]
+        })
+        mostradas += 1
+
+    if total > mostradas:
+        bloques.append({
+            "type": "context",
+            "elements": [{"type": "mrkdwn", "text": f"… y {total - mostradas} más. Marca estas y vuelve a escribir `/mis-promesas` para ver las siguientes."}]
+        })
+
+    client.chat_postEphemeral(channel=canal, user=usuario, blocks=bloques,
+                              text=f"Tus promesas pendientes ({total})")
+
+
+def _procesar_boton_marcar(ack, body, action, client, estado):
+    ack()
+    usuario = body["user"]["id"]
+    canal = body["channel"]["id"]
+    try:
+        data = json.loads(action["value"])
+    except Exception:
+        data = {}
+    cedula = data.get("c", "")
+    nombre = data.get("n", "")
+    try:
+        marcadas, _n = _marcar_promesa(cedula, estado)
+    except Exception as e:
+        client.chat_postEphemeral(channel=canal, user=usuario,
+            text=f"❌ Error al marcar: {type(e).__name__}: {e}")
+        return
+    emoji = "✅" if estado == "Cumplida" else "❌"
+    if marcadas == 0:
+        client.chat_postEphemeral(channel=canal, user=usuario,
+            text=f"⚠️ No encontré la cédula {cedula} en Contactados.")
+        return
+    client.chat_postEphemeral(channel=canal, user=usuario,
+        text=f"{emoji} Marcaste a *{nombre}* ({cedula}) como *{estado}*. ({marcadas} registro/s)")
+    # Aviso público en el canal de seguimiento
+    try:
+        client.chat_postMessage(channel=CANAL_SEGUIMIENTO,
+            text=f"{emoji} <@{usuario}> marcó como *{estado}* la promesa de {nombre} ({cedula}).")
+    except Exception as e:
+        print(f"⚠️ No se pudo avisar en seguimiento: {e}")
+
+
+@app.action("marcar_cumplida_btn")
+def marcar_cumplida_btn(ack, body, action, client):
+    _procesar_boton_marcar(ack, body, action, client, "Cumplida")
+
+
+@app.action("marcar_fallida_btn")
+def marcar_fallida_btn(ack, body, action, client):
+    _procesar_boton_marcar(ack, body, action, client, "Fallida")
 # ============ FIN COMANDO /mis-promesas ============
 
 
