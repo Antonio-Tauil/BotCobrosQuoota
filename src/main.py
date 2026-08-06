@@ -2633,6 +2633,393 @@ def tasa_hoy(ack, body, client):
         text=f"✅ Tasa del día fijada: Bs. {valor_num:,.4f} por USD.{aviso_cambio}")
 # ============ FIN TASA DEL DÍA ============
 
+
+# ============ MÓDULO DE MERCADEO (Conciliación de Pagos e Incidencias Técnicas) ============
+SHEET_ID_MERCADEO = "1BbSiDUmgQZ0B0myvLv_N4tPPe0nnKvzl4jJerxEgv9U"
+CANAL_MERCADEO_PAGOS = "C0BNMAXSLKW"
+CANAL_MERCADEO_INCIDENCIAS = "C0BN27H0N31"
+
+
+def _abrir_hoja_mercadeo(nombre_pestana):
+    creds_json = json.loads(os.environ["GOOGLE_CREDENTIALS"])
+    creds_json["private_key"] = creds_json["private_key"].replace("\\n", "\n")
+    creds = Credentials.from_service_account_info(
+        creds_json,
+        scopes=["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+    )
+    cliente = gspread.authorize(creds)
+    spreadsheet = cliente.open_by_key(SHEET_ID_MERCADEO)
+    return spreadsheet.worksheet(nombre_pestana)
+
+
+def guardar_conciliacion_mercadeo(fecha_reporte, nombre_colaborador, telefono, cedula, monto_bs, forma_pago,
+                                   banco, fecha_pago, monto_usd, tasa_bcv, referencia, estado, revisor,
+                                   fecha_revision, registro_id):
+    try:
+        sheet = _abrir_hoja_mercadeo("Conciliacion")
+        if _registro_ya_guardado(sheet, registro_id):
+            print("⚠️ Conciliación de Mercadeo duplicada (ya guardada), se omite.")
+            return "DUPLICADO"
+        sheet.append_row([fecha_reporte, nombre_colaborador, telefono, cedula, monto_bs, forma_pago,
+                           banco, fecha_pago, monto_usd, tasa_bcv, referencia, estado, revisor,
+                           fecha_revision, registro_id])
+        print(f"✅ Conciliación de Mercadeo guardada: {nombre_colaborador} ({cedula})")
+        return "OK"
+    except Exception as e:
+        print(f"❌ Error guardando conciliación de Mercadeo: {type(e).__name__}: {e}")
+        return "ERROR"
+
+
+def guardar_incidencia_mercadeo(fecha_reporte, nombre, cedula, empresa, incidencia, descripcion,
+                                 estado, revisor, fecha_revision, registro_id):
+    try:
+        sheet = _abrir_hoja_mercadeo("Incidencias Tecnicas")
+        if _registro_ya_guardado(sheet, registro_id):
+            print("⚠️ Incidencia técnica duplicada (ya guardada), se omite.")
+            return "DUPLICADO"
+        sheet.append_row([fecha_reporte, nombre, cedula, empresa, incidencia, descripcion,
+                           estado, revisor, fecha_revision, registro_id])
+        print(f"✅ Incidencia técnica guardada: {nombre} ({cedula})")
+        return "OK"
+    except Exception as e:
+        print(f"❌ Error guardando incidencia técnica: {type(e).__name__}: {e}")
+        return "ERROR"
+
+
+_BANCOS_MERCADEO = [
+    {"text": {"type": "plain_text", "text": "BDV - Banco de Venezuela"}, "value": "BDV"},
+    {"text": {"type": "plain_text", "text": "BNC - Banco Nacional de Crédito"}, "value": "BNC"},
+    {"text": {"type": "plain_text", "text": "BOD"}, "value": "BOD"},
+    {"text": {"type": "plain_text", "text": "Mercantil"}, "value": "Mercantil"},
+    {"text": {"type": "plain_text", "text": "Provincial"}, "value": "Provincial"},
+    {"text": {"type": "plain_text", "text": "Bicentenario"}, "value": "Bicentenario"},
+    {"text": {"type": "plain_text", "text": "Banesco"}, "value": "Banesco"},
+    {"text": {"type": "plain_text", "text": "Otro"}, "value": "Otro"}
+]
+
+_FORMAS_PAGO_MERCADEO = [
+    {"text": {"type": "plain_text", "text": "Pago Móvil"}, "value": "Pago Móvil"},
+    {"text": {"type": "plain_text", "text": "Transferencia"}, "value": "Transferencia"},
+    {"text": {"type": "plain_text", "text": "Zelle"}, "value": "Zelle"},
+    {"text": {"type": "plain_text", "text": "Efectivo"}, "value": "Efectivo"},
+    {"text": {"type": "plain_text", "text": "Otro"}, "value": "Otro"}
+]
+
+_INCIDENCIAS_MERCADEO = [
+    {"text": {"type": "plain_text", "text": "No accede"}, "value": "No accede"},
+    {"text": {"type": "plain_text", "text": "Falla al pagar"}, "value": "Falla al pagar"},
+    {"text": {"type": "plain_text", "text": "Crash"}, "value": "Crash"},
+    {"text": {"type": "plain_text", "text": "Otro"}, "value": "Otro"}
+]
+
+
+def _vista_form_conciliacion_mercadeo():
+    return {
+        "type": "modal",
+        "callback_id": "form_merca_conciliacion",
+        "title": {"type": "plain_text", "text": "Conciliación de Pago"},
+        "submit": {"type": "plain_text", "text": "Enviar"},
+        "blocks": [
+            {"type": "input", "block_id": "nombre_colaborador",
+             "label": {"type": "plain_text", "text": "Nombre de Colaborador"},
+             "element": {"type": "plain_text_input", "action_id": "valor"}},
+            {"type": "input", "block_id": "telefono",
+             "label": {"type": "plain_text", "text": "Teléfono"},
+             "element": {"type": "plain_text_input", "action_id": "valor"}},
+            {"type": "input", "block_id": "cedula",
+             "label": {"type": "plain_text", "text": "Cédula"},
+             "element": {"type": "plain_text_input", "action_id": "valor"}},
+            {"type": "input", "block_id": "monto_bs",
+             "label": {"type": "plain_text", "text": "Monto en Bs"},
+             "element": {"type": "plain_text_input", "action_id": "valor"}},
+            {"type": "input", "block_id": "forma_pago",
+             "label": {"type": "plain_text", "text": "Forma de Pago"},
+             "element": {"type": "static_select", "action_id": "valor",
+                         "placeholder": {"type": "plain_text", "text": "Selecciona"},
+                         "options": _FORMAS_PAGO_MERCADEO}},
+            {"type": "input", "block_id": "banco",
+             "label": {"type": "plain_text", "text": "Banco de Origen"},
+             "element": {"type": "static_select", "action_id": "valor",
+                         "placeholder": {"type": "plain_text", "text": "Selecciona"},
+                         "options": _BANCOS_MERCADEO}},
+            {"type": "input", "block_id": "fecha_pago",
+             "label": {"type": "plain_text", "text": "Fecha de Pago (DD/MM/AAAA)"},
+             "element": {"type": "plain_text_input", "action_id": "valor"}},
+            {"type": "input", "block_id": "monto_usd",
+             "label": {"type": "plain_text", "text": "Monto en USD"},
+             "element": {"type": "plain_text_input", "action_id": "valor"}},
+            {"type": "input", "block_id": "tasa_bcv",
+             "label": {"type": "plain_text", "text": "Tasa BCV Aplicada"},
+             "element": {"type": "plain_text_input", "action_id": "valor"}},
+            {"type": "input", "block_id": "referencia",
+             "label": {"type": "plain_text", "text": "Número de Referencia"},
+             "element": {"type": "plain_text_input", "action_id": "valor"}}
+        ]
+    }
+
+
+def _vista_form_incidencia_mercadeo():
+    return {
+        "type": "modal",
+        "callback_id": "form_merca_incidencia",
+        "title": {"type": "plain_text", "text": "Incidencia Técnica"},
+        "submit": {"type": "plain_text", "text": "Enviar"},
+        "blocks": [
+            {"type": "input", "block_id": "nombre",
+             "label": {"type": "plain_text", "text": "Nombre"},
+             "element": {"type": "plain_text_input", "action_id": "valor"}},
+            {"type": "input", "block_id": "cedula",
+             "label": {"type": "plain_text", "text": "Cédula"},
+             "element": {"type": "plain_text_input", "action_id": "valor"}},
+            {"type": "input", "block_id": "empresa",
+             "label": {"type": "plain_text", "text": "Empresa"},
+             "element": {"type": "plain_text_input", "action_id": "valor"}},
+            {"type": "input", "block_id": "incidencia",
+             "label": {"type": "plain_text", "text": "Incidencia"},
+             "element": {"type": "static_select", "action_id": "valor",
+                         "placeholder": {"type": "plain_text", "text": "Selecciona"},
+                         "options": _INCIDENCIAS_MERCADEO}},
+            {"type": "input", "block_id": "descripcion",
+             "label": {"type": "plain_text", "text": "Descripción"},
+             "element": {"type": "plain_text_input", "action_id": "valor", "multiline": True}}
+        ]
+    }
+
+
+@app.command("/merca-reporte")
+def abrir_selector_mercadeo(ack, body, client):
+    ack()
+    client.views_open(
+        trigger_id=body["trigger_id"],
+        view={
+            "type": "modal",
+            "callback_id": "form_merca_tipo",
+            "title": {"type": "plain_text", "text": "Reporte de Mercadeo"},
+            "submit": {"type": "plain_text", "text": "Continuar"},
+            "blocks": [
+                {"type": "input", "block_id": "tipo_caso",
+                 "label": {"type": "plain_text", "text": "¿Qué tipo de caso deseas registrar?"},
+                 "element": {"type": "static_select", "action_id": "valor",
+                             "placeholder": {"type": "plain_text", "text": "Selecciona"},
+                             "options": [
+                                 {"text": {"type": "plain_text", "text": "Conciliación de Pago"}, "value": "conciliacion"},
+                                 {"text": {"type": "plain_text", "text": "Incidencia Técnica / Acceso App"}, "value": "incidencia"}
+                             ]}}
+            ]
+        }
+    )
+
+
+@app.view("form_merca_tipo")
+def elegir_tipo_mercadeo(ack, body):
+    tipo = body["view"]["state"]["values"]["tipo_caso"]["valor"]["selected_option"]["value"]
+    if tipo == "conciliacion":
+        ack(response_action="update", view=_vista_form_conciliacion_mercadeo())
+    else:
+        ack(response_action="update", view=_vista_form_incidencia_mercadeo())
+
+
+@app.view("form_merca_conciliacion")
+def recibir_conciliacion_mercadeo(ack, body, client):
+    _v = body["view"]["state"]["values"]
+    _err = _validar_view(_v, [('telefono', 'telefono'), ('cedula', 'cedula'), ('fecha_pago', 'fecha')])
+    if _err:
+        ack(response_action="errors", errors=_err)
+        return
+    ack()
+    valores = body["view"]["state"]["values"]
+    nombre_colaborador = valores["nombre_colaborador"]["valor"]["value"]
+    telefono = valores["telefono"]["valor"]["value"]
+    cedula = valores["cedula"]["valor"]["value"]
+    monto_bs_str = valores["monto_bs"]["valor"]["value"]
+    forma_pago = valores["forma_pago"]["valor"]["selected_option"]["value"]
+    banco = valores["banco"]["valor"]["selected_option"]["value"]
+    fecha_pago = valores["fecha_pago"]["valor"]["value"]
+    monto_usd_str = valores["monto_usd"]["valor"]["value"]
+    tasa_bcv_str = valores["tasa_bcv"]["valor"]["value"]
+    referencia = valores["referencia"]["valor"]["value"]
+    usuario_slack = body["user"]["id"]
+    fecha_reporte = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y")
+
+    try:
+        monto_bs_fmt = f"Bs. {parse_numero(monto_bs_str):,.2f}"
+    except (ValueError, AttributeError):
+        monto_bs_fmt = f"Bs. {monto_bs_str}"
+    try:
+        monto_usd_fmt = f"$ {parse_numero(monto_usd_str):,.2f}"
+    except (ValueError, AttributeError):
+        monto_usd_fmt = f"$ {monto_usd_str}"
+    try:
+        tasa_bcv_fmt = f"Bs. {parse_numero(tasa_bcv_str):,.4f}"
+    except (ValueError, AttributeError):
+        tasa_bcv_fmt = f"Bs. {tasa_bcv_str}"
+
+    texto = (
+        f"*Nueva conciliación de pago (Mercadeo)* 🧾\n"
+        f"*Fecha de Reporte:* {fecha_reporte}\n"
+        f"*Reportado por:* <@{usuario_slack}>\n"
+        f"*Colaborador:* {nombre_colaborador}\n"
+        f"*Teléfono:* {telefono}\n"
+        f"*Cédula:* {cedula}\n"
+        f"*Monto en Bs:* {monto_bs_fmt}\n"
+        f"*Forma de Pago:* {forma_pago}\n"
+        f"*Banco de Origen:* {banco}\n"
+        f"*Fecha de Pago:* {fecha_pago}\n"
+        f"*Monto en USD:* {monto_usd_fmt}\n"
+        f"*Tasa BCV Aplicada:* {tasa_bcv_fmt}\n"
+        f"*Número de Referencia:* {referencia}"
+    )
+    try:
+        client.chat_postMessage(
+            channel=CANAL_MERCADEO_PAGOS,
+            text="Nueva conciliación de pago (Mercadeo)",
+            metadata={"event_type": "merca_conciliacion", "event_payload": {
+                "fecha_reporte": fecha_reporte, "nombre_colaborador": nombre_colaborador, "telefono": telefono,
+                "cedula": cedula, "monto_bs": monto_bs_fmt, "forma_pago": forma_pago, "banco": banco,
+                "fecha_pago": fecha_pago, "monto_usd": monto_usd_fmt, "tasa_bcv": tasa_bcv_fmt,
+                "referencia": referencia}},
+            blocks=[
+                {"type": "section", "text": {"type": "mrkdwn", "text": texto}},
+                {"type": "actions", "elements": [
+                    {"type": "button", "text": {"type": "plain_text", "text": "✅ Aprobar"}, "style": "primary", "action_id": "aprobar_merca_conciliacion"},
+                    {"type": "button", "text": {"type": "plain_text", "text": "❌ Rechazar"}, "style": "danger", "action_id": "rechazar_merca_conciliacion"}
+                ]}
+            ]
+        )
+    except Exception as e:
+        print(f"⚠️ No se pudo enviar mensaje al canal de mercadeo-pagos: {e}")
+
+
+@app.action("aprobar_merca_conciliacion")
+def aprobar_merca_conciliacion(ack, body, client):
+    ack()
+    texto_original = body["message"]["blocks"][0]["text"]["text"]
+    if _ya_procesado(texto_original):
+        return
+    fecha_revision = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y")
+    registro_id = _id_amigable("MERCACONC", body["message"]["ts"])
+    resultado = "ERROR"
+    try:
+        meta = body["message"].get("metadata", {}).get("event_payload", {})
+        resultado = guardar_conciliacion_mercadeo(
+            meta.get("fecha_reporte", fecha_revision), meta.get("nombre_colaborador", ""), meta.get("telefono", ""),
+            meta.get("cedula", ""), meta.get("monto_bs", ""), meta.get("forma_pago", ""), meta.get("banco", ""),
+            meta.get("fecha_pago", ""), meta.get("monto_usd", ""), meta.get("tasa_bcv", ""), meta.get("referencia", ""),
+            "Aprobado", body["user"]["id"], fecha_revision, registro_id)
+    except Exception as e:
+        print(f"Error: {e}")
+    if resultado == "DUPLICADO":
+        encabezado = f"⚠️ *YA REGISTRADA* — esta conciliación ya estaba guardada, no se duplicó. Revisado por <@{body['user']['id']}> el {fecha_revision}"
+    else:
+        encabezado = f"✅ *APROBADO* por <@{body['user']['id']}> el {fecha_revision}"
+    client.chat_update(
+        channel=body["channel"]["id"], ts=body["message"]["ts"], text="Conciliación de Mercadeo procesada",
+        blocks=[{"type": "section", "text": {"type": "mrkdwn", "text": f"{encabezado}\n\n{texto_original}"}}]
+    )
+
+
+@app.action("rechazar_merca_conciliacion")
+def rechazar_merca_conciliacion(ack, body, client):
+    ack()
+    texto_original = body["message"]["blocks"][0]["text"]["text"]
+    if _ya_procesado(texto_original):
+        return
+    fecha_revision = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y")
+    client.chat_update(
+        channel=body["channel"]["id"], ts=body["message"]["ts"], text="Conciliación de Mercadeo RECHAZADA",
+        blocks=[{"type": "section", "text": {"type": "mrkdwn",
+                 "text": f"❌ *RECHAZADO* por <@{body['user']['id']}> el {fecha_revision}\n\n{texto_original}"}}]
+    )
+
+
+@app.view("form_merca_incidencia")
+def recibir_incidencia_mercadeo(ack, body, client):
+    _v = body["view"]["state"]["values"]
+    _err = _validar_view(_v, [('cedula', 'cedula')])
+    if _err:
+        ack(response_action="errors", errors=_err)
+        return
+    ack()
+    valores = body["view"]["state"]["values"]
+    nombre = valores["nombre"]["valor"]["value"]
+    cedula = valores["cedula"]["valor"]["value"]
+    empresa = valores["empresa"]["valor"]["value"]
+    incidencia = valores["incidencia"]["valor"]["selected_option"]["value"]
+    descripcion = valores["descripcion"]["valor"]["value"]
+    usuario_slack = body["user"]["id"]
+    fecha_reporte = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y")
+
+    texto = (
+        f"*Nueva incidencia técnica (Mercadeo)* 🛠️\n"
+        f"*Fecha de Reporte:* {fecha_reporte}\n"
+        f"*Reportado por:* <@{usuario_slack}>\n"
+        f"*Nombre:* {nombre}\n"
+        f"*Cédula:* {cedula}\n"
+        f"*Empresa:* {empresa}\n"
+        f"*Incidencia:* {incidencia}\n"
+        f"*Descripción:* {descripcion}"
+    )
+    try:
+        client.chat_postMessage(
+            channel=CANAL_MERCADEO_INCIDENCIAS,
+            text="Nueva incidencia técnica (Mercadeo)",
+            metadata={"event_type": "merca_incidencia", "event_payload": {
+                "fecha_reporte": fecha_reporte, "nombre": nombre, "cedula": cedula, "empresa": empresa,
+                "incidencia": incidencia, "descripcion": descripcion}},
+            blocks=[
+                {"type": "section", "text": {"type": "mrkdwn", "text": texto}},
+                {"type": "actions", "elements": [
+                    {"type": "button", "text": {"type": "plain_text", "text": "✅ Aprobar"}, "style": "primary", "action_id": "aprobar_merca_incidencia"},
+                    {"type": "button", "text": {"type": "plain_text", "text": "❌ Rechazar"}, "style": "danger", "action_id": "rechazar_merca_incidencia"}
+                ]}
+            ]
+        )
+    except Exception as e:
+        print(f"⚠️ No se pudo enviar mensaje al canal de mercadeo-incidencias: {e}")
+
+
+@app.action("aprobar_merca_incidencia")
+def aprobar_merca_incidencia(ack, body, client):
+    ack()
+    texto_original = body["message"]["blocks"][0]["text"]["text"]
+    if _ya_procesado(texto_original):
+        return
+    fecha_revision = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y")
+    registro_id = _id_amigable("MERCAINC", body["message"]["ts"])
+    resultado = "ERROR"
+    try:
+        meta = body["message"].get("metadata", {}).get("event_payload", {})
+        resultado = guardar_incidencia_mercadeo(
+            meta.get("fecha_reporte", fecha_revision), meta.get("nombre", ""), meta.get("cedula", ""),
+            meta.get("empresa", ""), meta.get("incidencia", ""), meta.get("descripcion", ""),
+            "Aprobado", body["user"]["id"], fecha_revision, registro_id)
+    except Exception as e:
+        print(f"Error: {e}")
+    if resultado == "DUPLICADO":
+        encabezado = f"⚠️ *YA REGISTRADA* — esta incidencia ya estaba guardada, no se duplicó. Revisado por <@{body['user']['id']}> el {fecha_revision}"
+    else:
+        encabezado = f"✅ *APROBADO* por <@{body['user']['id']}> el {fecha_revision}"
+    client.chat_update(
+        channel=body["channel"]["id"], ts=body["message"]["ts"], text="Incidencia técnica procesada",
+        blocks=[{"type": "section", "text": {"type": "mrkdwn", "text": f"{encabezado}\n\n{texto_original}"}}]
+    )
+
+
+@app.action("rechazar_merca_incidencia")
+def rechazar_merca_incidencia(ack, body, client):
+    ack()
+    texto_original = body["message"]["blocks"][0]["text"]["text"]
+    if _ya_procesado(texto_original):
+        return
+    fecha_revision = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y")
+    client.chat_update(
+        channel=body["channel"]["id"], ts=body["message"]["ts"], text="Incidencia técnica RECHAZADA",
+        blocks=[{"type": "section", "text": {"type": "mrkdwn",
+                 "text": f"❌ *RECHAZADO* por <@{body['user']['id']}> el {fecha_revision}\n\n{texto_original}"}}]
+    )
+# ============ FIN MÓDULO DE MERCADEO ============
+
+
 if __name__ == "__main__":
     print("🤖 Robotín está despierto y conectándose a Slack...")
     # Programar el Radar de Promesas todos los días a las 4:00 PM (hora Venezuela)
