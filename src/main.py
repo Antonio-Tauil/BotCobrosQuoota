@@ -2631,7 +2631,8 @@ def _guardar_en_historial_tasas(fecha_str, valor_num):
     try:
         col_fecha, col_tasa = _buscar_columnas_historial_tasas(ws)
         if col_fecha is None or col_tasa is None:
-            print(f"⚠️ Historial Tasas: faltan las columnas 'Fecha' y/o 'Tasa' en la pestaña '{PESTANA_HISTORIAL_TASAS}'")
+            print(f"⚠️ Historial Tasas: faltan las columnas 'Fecha' y/o 'Tasa' en la pestaña '{PESTANA_HISTORIAL_TASAS}'. "
+                  f"Encabezados leídos (fila 1): {ws.row_values(1)!r}")
             return False
         valores = ws.get_all_values()
         for i, fila in enumerate(valores[1:], start=2):  # fila 1 = encabezados
@@ -2655,7 +2656,8 @@ def _tasa_de_fecha(fecha_str):
     try:
         col_fecha, col_tasa = _buscar_columnas_historial_tasas(ws)
         if col_fecha is None or col_tasa is None:
-            print(f"⚠️ Historial Tasas: faltan las columnas 'Fecha' y/o 'Tasa' en la pestaña '{PESTANA_HISTORIAL_TASAS}'")
+            print(f"⚠️ Historial Tasas: faltan las columnas 'Fecha' y/o 'Tasa' en la pestaña '{PESTANA_HISTORIAL_TASAS}'. "
+                  f"Encabezados leídos (fila 1): {ws.row_values(1)!r}")
             return None
         valores = ws.get_all_values()
         for fila in valores[1:]:
