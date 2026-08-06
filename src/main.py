@@ -1,6 +1,7 @@
 import os
 import re
 import json
+import unicodedata
 import gspread
 from datetime import datetime, date, timedelta
 from zoneinfo import ZoneInfo
@@ -101,6 +102,44 @@ def _registro_ya_guardado(sheet, registro_id):
 def _ya_procesado(texto):
     return texto.lstrip().startswith(("✅", "❌", "⚠"))
 # ============ FIN BLINDAJE ANTI-DUPLICADOS ============
+
+
+# ============ GUARDAR EN SHEETS POR NOMBRE DE COLUMNA (Fase 2 - Sostenibilidad) ============
+def _normalizar_encabezado(texto):
+    """Deja un encabezado listo para comparar: minúsculas, sin tildes, sin espacios de sobra."""
+    t = str(texto or "").strip().lower()
+    t = unicodedata.normalize("NFKD", t)
+    return "".join(c for c in t if not unicodedata.combining(c))
+
+
+def _guardar_fila_por_encabezado(sheet, datos):
+    """
+    Guarda una fila nueva en 'sheet' colocando cada valor en la columna que le corresponde
+    POR NOMBRE, no por posición. 'datos' es un diccionario {nombre_de_columna: valor}, en el
+    orden en que se quiere que caigan los datos que no tengan columna en el Sheet.
+
+    Compara los nombres de columna ignorando mayúsculas, tildes y espacios de más, para que un
+    encabezado como "Conciliación" o "Conciliacion" (con o sin tilde) se reconozca igual.
+
+    Si alguna clave de 'datos' no tiene una columna con ese nombre en el Sheet, su valor se
+    agrega al final de la fila, siempre en el mismo orden, para no perder el dato ni desalinear
+    las columnas que sí existen.
+    """
+    encabezados_sheet = sheet.row_values(1)
+    restantes = dict(datos)
+    fila = []
+    for encabezado in encabezados_sheet:
+        objetivo = _normalizar_encabezado(encabezado)
+        valor_encontrado = ""
+        for clave in list(restantes.keys()):
+            if _normalizar_encabezado(clave) == objetivo:
+                valor_encontrado = restantes.pop(clave)
+                break
+        fila.append(valor_encontrado)
+    # Cualquier dato que no tenía columna con ese nombre se agrega al final (siempre el mismo orden)
+    fila.extend(restantes.values())
+    sheet.append_row(fila)
+# ============ FIN GUARDAR POR NOMBRE DE COLUMNA ============
 
 
 # ============ LISTA DE COBRADORES (compartida) ============
@@ -2656,9 +2695,25 @@ def guardar_conciliacion_mercadeo(fecha_reporte, nombre_colaborador, telefono, c
         if _registro_ya_guardado(sheet, registro_id):
             print("⚠️ Conciliación de Mercadeo duplicada (ya guardada), se omite.")
             return "DUPLICADO"
-        sheet.append_row([fecha_reporte, nombre_colaborador, telefono, cedula, monto_bs, forma_pago,
-                           banco, fecha_pago, monto_usd, tasa_bcv, referencia, "", estado, revisor,
-                           fecha_revision, registro_id])
+        datos = {
+            "Fecha de Reporte": fecha_reporte,
+            "Nombre de Colaborador": nombre_colaborador,
+            "Telefono": telefono,
+            "Cedula": cedula,
+            "Monto en Bs": monto_bs,
+            "Forma de Pago": forma_pago,
+            "Banco de Origen": banco,
+            "Fecha de Pago": fecha_pago,
+            "Monto en USD": monto_usd,
+            "Tasa BCV Aplicada": tasa_bcv,
+            "Numero de Referencia": referencia,
+            "Comprobante": "",
+            "Estado": estado,
+            "Revisado por": revisor,
+            "Fecha de Revision": fecha_revision,
+            "ID Registro": registro_id,
+        }
+        _guardar_fila_por_encabezado(sheet, datos)
         print(f"✅ Conciliación de Mercadeo guardada: {nombre_colaborador} ({cedula})")
         return "OK"
     except Exception as e:
@@ -2673,8 +2728,19 @@ def guardar_incidencia_mercadeo(fecha_reporte, nombre, cedula, empresa, incidenc
         if _registro_ya_guardado(sheet, registro_id):
             print("⚠️ Incidencia técnica duplicada (ya guardada), se omite.")
             return "DUPLICADO"
-        sheet.append_row([fecha_reporte, nombre, cedula, empresa, incidencia, descripcion,
-                           estado, revisor, fecha_revision, registro_id])
+        datos = {
+            "Fecha": fecha_reporte,
+            "Nombre": nombre,
+            "Cedula": cedula,
+            "Empresa": empresa,
+            "Incidencias": incidencia,
+            "Descripcion": descripcion,
+            "Estado": estado,
+            "Revisado por": revisor,
+            "Fecha de Revision": fecha_revision,
+            "ID Registro": registro_id,
+        }
+        _guardar_fila_por_encabezado(sheet, datos)
         print(f"✅ Incidencia técnica guardada: {nombre} ({cedula})")
         return "OK"
     except Exception as e:
