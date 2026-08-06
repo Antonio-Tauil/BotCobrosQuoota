@@ -2661,7 +2661,7 @@ def guardar_conciliacion_mercadeo(fecha_reporte, nombre_colaborador, telefono, c
             print("⚠️ Conciliación de Mercadeo duplicada (ya guardada), se omite.")
             return "DUPLICADO"
         sheet.append_row([fecha_reporte, nombre_colaborador, telefono, cedula, monto_bs, forma_pago,
-                           banco, fecha_pago, monto_usd, tasa_bcv, referencia, estado, revisor,
+                           banco, fecha_pago, monto_usd, tasa_bcv, referencia, "", estado, revisor,
                            fecha_revision, registro_id])
         print(f"✅ Conciliación de Mercadeo guardada: {nombre_colaborador} ({cedula})")
         return "OK"
