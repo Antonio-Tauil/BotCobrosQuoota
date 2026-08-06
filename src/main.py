@@ -12,6 +12,28 @@ from apscheduler.schedulers.background import BackgroundScheduler
 app = App(token=os.environ["SLACK_BOT_TOKEN"])
 
 
+# ============ CONFIGURACIÓN GENERAL (Sheets, Canales y otros IDs de Slack) ============
+# El Sheet principal de Cobros usa la variable de entorno SHEET_ID (puesta en Railway).
+SHEET_ID_COBRO2 = "1KbWx1d5ujGmNwjGbdb-c_QAwiEkxJpxLb1BOFOCY9QM"          # Call Center Seguros
+SHEET_ID_LIQUIDACIONES = "1MYKQ-CnyMQBTEZcSBIXt-KDsBbfJt-tUmG-k5aZvDI0"   # Liquidaciones (Lista VIP)
+SHEET_ID_COMERCIAL = "1Zayi6aQPoSjDadbAozhLGJaO7dU-6p51dQ5SXnaU6mc"      # Equipo Comercial
+SHEET_ID_LEGAL = "1Zayi6aQPoSjDadbAozhLGJaO7dU-6p51dQ5SXnaU6mc"          # Equipo Legal (mismo Sheet que Comercial)
+SHEET_ID_ESCALADOS = "1Zayi6aQPoSjDadbAozhLGJaO7dU-6p51dQ5SXnaU6mc"      # Clientes Escalados (mismo Sheet que Comercial/Legal)
+SHEET_ID_MERCADEO = "1BbSiDUmgQZ0B0myvLv_N4tPPe0nnKvzl4jJerxEgv9U"       # Mercadeo (Conciliación de Pagos e Incidencias Técnicas)
+
+CANAL_LIQUIDACIONES = "C0BE1HLRV1R"
+CANAL_COMERCIAL = "C0BE5LJL729"
+CANAL_LEGAL = "C0BJYNVG5PW"
+CANAL_ESCALADOS = "C0BK1FFH5M3"
+CANAL_SEGUIMIENTO = "C0BJWPMA3NF"          # Radar de promesas (4 PM)
+CANAL_CIERRE = "#cobranzas-log"           # Cierre diario de cobros (6 PM)
+CANAL_MERCADEO_PAGOS = "C0BNMAXSLKW"
+CANAL_MERCADEO_INCIDENCIAS = "C0BN27H0N31"
+
+SUPERVISOR_ID = "U0B51AREWDU"  # Leandro Quoota (escalamiento del Radar de promesas)
+# ============ FIN CONFIGURACIÓN GENERAL ============
+
+
 # ============ FUNCIÓN PARA LEER NÚMEROS EN CUALQUIER FORMATO ============
 def parse_numero(texto):
     if texto is None:
@@ -620,9 +642,6 @@ def rechazar_domiciliacion(ack, body, client):
 
 
 # ============ COMANDO /cobro-callcenter (Call Center Seguros) ============
-SHEET_ID_COBRO2 = "1KbWx1d5ujGmNwjGbdb-c_QAwiEkxJpxLb1BOFOCY9QM"
-
-
 def guardar_en_sheet_cobro2(fecha, nombre, telefono, cedula, monto_bs, forma_pago, banco, monto_usd, tasa_bcv, referencia, registro_id=""):
     try:
         creds_json = json.loads(os.environ["GOOGLE_CREDENTIALS"])
@@ -1019,9 +1038,6 @@ def rechazar_conciliacion(ack, body, client):
 
 
 # ============ COMANDOS DE LIQUIDACIONES (Lista VIP) ============
-SHEET_ID_LIQUIDACIONES = "1MYKQ-CnyMQBTEZcSBIXt-KDsBbfJt-tUmG-k5aZvDI0"
-CANAL_LIQUIDACIONES = "C0BE1HLRV1R"
-
 ESTATUS_LIQUIDACION = [
     "Pending", "In validation", "Template contract", "Waiting contract",
     "Contract in validation", "Fecha primer pago", "Pending deposit"
@@ -1301,10 +1317,6 @@ def rechazar_liquidacion_estatus(ack, body, client):
 
 
 # ============ COMANDO /cobro-comercial (Equipo Comercial) ============
-SHEET_ID_COMERCIAL = "1Zayi6aQPoSjDadbAozhLGJaO7dU-6p51dQ5SXnaU6mc"
-CANAL_COMERCIAL = "C0BE5LJL729"
-
-
 def guardar_en_sheet_comercial(fecha, nombre, telefono, cedula, monto_bs, forma_pago, banco, monto_usd, tasa_bcv, empresa, registro_id=""):
     try:
         creds_json = json.loads(os.environ["GOOGLE_CREDENTIALS"])
@@ -1490,10 +1502,6 @@ def rechazar_comercial(ack, body, client):
 
 
 # ============ COMANDO /contacto-legal (Equipo Legal) ============
-SHEET_ID_LEGAL = "1Zayi6aQPoSjDadbAozhLGJaO7dU-6p51dQ5SXnaU6mc"
-CANAL_LEGAL = "C0BJYNVG5PW"
-
-
 def guardar_en_contactados_legal(fecha, nombre, telefono, cedula, compromiso, cobrador, comentario, registro_id=""):
     try:
         creds_json = json.loads(os.environ["GOOGLE_CREDENTIALS"])
@@ -1704,10 +1712,6 @@ def listar_ids(ack, body, client):
 
 
 # ============ COMANDO /cliente-escalado (Clientes Escalados) ============
-SHEET_ID_ESCALADOS = "1Zayi6aQPoSjDadbAozhLGJaO7dU-6p51dQ5SXnaU6mc"
-CANAL_ESCALADOS = "C0BK1FFH5M3"
-
-
 # Columnas: Fecha, Nombre del cliente, Teléfono, Cédula, Empresa, Incidencia, Reportada por
 def guardar_cliente_escalado(fecha, nombre, telefono, cedula, empresa, incidencia, reportada_por):
     try:
@@ -1928,8 +1932,6 @@ def get_cliente_busqueda():
 # ============ FIN COMANDO /buscar-cliente ============
 
 # ============ RADAR DE PROMESAS DE PAGO (Fase 1) ============
-CANAL_SEGUIMIENTO = "C0BJWPMA3NF"
-SUPERVISOR_ID = "U0B51AREWDU"  # Leandro Quoota
 
 # Tabla nombre del cobrador (como aparece en el Sheet) -> ID(s) de Slack
 COBRADOR_SLACK_IDS = {
@@ -2222,7 +2224,6 @@ def promesa_fallida(ack, body, client):
 
 
 # ============ CIERRE DIARIO DE COBROS (reporte automático 6 PM) ============
-CANAL_CIERRE = "#cobranzas-log"
 
 
 def generar_cierre_diario():
@@ -2635,11 +2636,6 @@ def tasa_hoy(ack, body, client):
 
 
 # ============ MÓDULO DE MERCADEO (Conciliación de Pagos e Incidencias Técnicas) ============
-SHEET_ID_MERCADEO = "1BbSiDUmgQZ0B0myvLv_N4tPPe0nnKvzl4jJerxEgv9U"
-CANAL_MERCADEO_PAGOS = "C0BNMAXSLKW"
-CANAL_MERCADEO_INCIDENCIAS = "C0BN27H0N31"
-
-
 def _abrir_hoja_mercadeo(nombre_pestana):
     creds_json = json.loads(os.environ["GOOGLE_CREDENTIALS"])
     creds_json["private_key"] = creds_json["private_key"].replace("\\n", "\n")
