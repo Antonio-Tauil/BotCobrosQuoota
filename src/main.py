@@ -32,6 +32,10 @@ CANAL_MERCADEO_PAGOS = "C0BNMAXSLKW"
 CANAL_MERCADEO_INCIDENCIAS = "C0BN27H0N31"
 
 SUPERVISOR_ID = "U0B51AREWDU"  # Leandro Quoota (escalamiento del Radar de promesas)
+
+# Nombres de pestañas dentro del Sheet principal de Cobros (SHEET_ID)
+PESTANA_INDICADORES = "Indicadores"           # Tasa del día (vigente) — B20=valor, C20=fecha
+PESTANA_HISTORIAL_TASAS = "Historial Tasas"   # Historial de tasas por fecha (columnas: Fecha, Tasa)
 # ============ FIN CONFIGURACIÓN GENERAL ============
 
 
@@ -354,6 +358,9 @@ def reportar_cobro(ack, body, client):
             "title": {"type": "plain_text", "text": "Reportar Cobro"},
             "submit": {"type": "plain_text", "text": "Enviar"},
             "blocks": [
+                {"type": "input", "block_id": "fecha_pago", "optional": True,
+                 "label": {"type": "plain_text", "text": "Fecha del Pago (DD/MM/AAAA) — déjalo vacío si es de hoy"},
+                 "element": {"type": "plain_text_input", "action_id": "valor"}},
                 {"type": "input", "block_id": "nombre_cobrador",
                  "label": {"type": "plain_text", "text": "Nombre del Cobrador"},
                  "element": {"type": "static_select", "action_id": "valor",
@@ -405,9 +412,24 @@ def reportar_cobro(ack, body, client):
 def recibir_cobro(ack, body, client):
     _v = body["view"]["state"]["values"]
     _err = _validar_view(_v, [('cedula', 'cedula')])
-    _tasa_num = _tasa_de_hoy()
+
+    hoy_txt = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y")
+    fecha_pago_input = (_v.get("fecha_pago", {}).get("valor", {}).get("value") or "").strip()
+    if fecha_pago_input:
+        _ok_fecha, _msg_fecha = _es_fecha_valida(fecha_pago_input)
+        if not _ok_fecha:
+            _err["fecha_pago"] = _msg_fecha
+        fecha_pago_final = fecha_pago_input
+    else:
+        fecha_pago_final = hoy_txt
+
+    _tasa_num = _tasa_de_pago(fecha_pago_final, hoy_txt)
     if _tasa_num is None:
-        _err["monto_bs"] = "⚠️ Falta la tasa de hoy. Pide que pongan /tasa-hoy [valor] antes de reportar cobros."
+        if fecha_pago_final == hoy_txt:
+            _err["monto_bs"] = "⚠️ Falta la tasa de hoy. Pide que pongan /tasa-hoy [valor] antes de reportar cobros."
+        else:
+            _err["fecha_pago"] = (f"⚠️ No hay tasa registrada para el {fecha_pago_final}. Pide que la fijen con "
+                                   f"/tasa-hoy {fecha_pago_final} [valor] antes de reportar este cobro.")
     if _err:
         ack(response_action="errors", errors=_err)
         return
@@ -423,7 +445,7 @@ def recibir_cobro(ack, body, client):
     tasa_bcv_num = _tasa_num
     tasa_bcv_str = f"{tasa_bcv_num:,.4f}"
     cobrador_slack = body["user"]["id"]
-    fecha = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y")
+    fecha = fecha_pago_final
     try:
         monto_bs_num = parse_numero(monto_bs_str)
         monto_usd_str = f"${monto_bs_num/tasa_bcv_num:,.2f}"
@@ -2547,9 +2569,9 @@ def _abrir_indicadores():
         cliente = get_cliente_busqueda()
         spreadsheet = cliente.open_by_key(os.environ["SHEET_ID"])
         for ws in spreadsheet.worksheets():
-            if ws.title.strip().lower() == "indicadores":
+            if ws.title.strip().lower() == PESTANA_INDICADORES.lower():
                 return ws
-        print("⚠️ Tasa: no se encontró la hoja 'Indicadores'")
+        print(f"⚠️ Tasa: no se encontró la hoja '{PESTANA_INDICADORES}'")
         return None
     except Exception as e:
         print(f"⚠️ Tasa: error abriendo 'Indicadores': {type(e).__name__}: {e}")
@@ -2557,7 +2579,9 @@ def _abrir_indicadores():
 
 
 def _guardar_tasa_dia(valor_num):
-    """Guarda la tasa (etiqueta + valor + fecha) en una sola operación. Devuelve True/False."""
+    """Guarda la tasa de HOY (etiqueta + valor + fecha) en una sola operación. Devuelve True/False.
+    También la deja registrada en el historial (pestaña 'Historial Tasas'), para poder
+    consultarla más adelante si alguien reporta un pago atrasado de este mismo día."""
     ws = _abrir_indicadores()
     if ws is None:
         return False
@@ -2565,10 +2589,96 @@ def _guardar_tasa_dia(valor_num):
     try:
         # Una sola escritura (A20:C20) para evitar quedar a medias
         ws.update(f"A{FILA_TASA}:C{FILA_TASA}", [["Tasa del día", str(valor_num), hoy_txt]])
+        _guardar_en_historial_tasas(hoy_txt, valor_num)
         return True
     except Exception as e:
         print(f"❌ Tasa: error guardando: {type(e).__name__}: {e}")
         return False
+
+
+def _abrir_historial_tasas():
+    """Abre la pestaña de historial de tasas (mismo Sheet que 'Indicadores'). None si hay problema."""
+    try:
+        cliente = get_cliente_busqueda()
+        spreadsheet = cliente.open_by_key(os.environ["SHEET_ID"])
+        for ws in spreadsheet.worksheets():
+            if ws.title.strip().lower() == PESTANA_HISTORIAL_TASAS.lower():
+                return ws
+        print(f"⚠️ Historial Tasas: no se encontró la pestaña '{PESTANA_HISTORIAL_TASAS}'")
+        return None
+    except Exception as e:
+        print(f"⚠️ Historial Tasas: error abriendo la pestaña: {type(e).__name__}: {e}")
+        return None
+
+
+def _buscar_columnas_historial_tasas(ws):
+    """Ubica por NOMBRE (no por posición) las columnas 'Fecha' y 'Tasa' del historial.
+    Devuelve (col_fecha, col_tasa) como índices base 0, o (None, None) si faltan."""
+    encabezados = [_normalizar_encabezado(c) for c in ws.row_values(1)]
+    col_fecha = encabezados.index("fecha") if "fecha" in encabezados else None
+    col_tasa = encabezados.index("tasa") if "tasa" in encabezados else None
+    return col_fecha, col_tasa
+
+
+def _guardar_en_historial_tasas(fecha_str, valor_num):
+    """Guarda o actualiza la tasa de 'fecha_str' en el historial (una fila por fecha),
+    colocando cada dato en la columna que le corresponde POR NOMBRE (Fecha, Tasa), no por
+    posición — igual que el resto del bot desde la Fase 2 de sostenibilidad.
+    No lanza error nunca — si el historial no existe todavía, simplemente no hace nada."""
+    ws = _abrir_historial_tasas()
+    if ws is None:
+        return False
+    try:
+        col_fecha, col_tasa = _buscar_columnas_historial_tasas(ws)
+        if col_fecha is None or col_tasa is None:
+            print(f"⚠️ Historial Tasas: faltan las columnas 'Fecha' y/o 'Tasa' en la pestaña '{PESTANA_HISTORIAL_TASAS}'")
+            return False
+        valores = ws.get_all_values()
+        for i, fila in enumerate(valores[1:], start=2):  # fila 1 = encabezados
+            if len(fila) > col_fecha and str(fila[col_fecha]).strip() == fecha_str:
+                ws.update_cell(i, col_tasa + 1, str(valor_num))  # gspread usa columnas base 1
+                return True
+        _guardar_fila_por_encabezado(ws, {"Fecha": fecha_str, "Tasa": str(valor_num)})
+        return True
+    except Exception as e:
+        print(f"❌ Historial Tasas: error guardando: {type(e).__name__}: {e}")
+        return False
+
+
+def _tasa_de_fecha(fecha_str):
+    """Devuelve el número de la tasa registrada para 'fecha_str' en el historial, o None
+    si no hay ninguna registrada o no es válida. Busca la columna por nombre, no por
+    posición. Nunca lanza error."""
+    ws = _abrir_historial_tasas()
+    if ws is None:
+        return None
+    try:
+        col_fecha, col_tasa = _buscar_columnas_historial_tasas(ws)
+        if col_fecha is None or col_tasa is None:
+            print(f"⚠️ Historial Tasas: faltan las columnas 'Fecha' y/o 'Tasa' en la pestaña '{PESTANA_HISTORIAL_TASAS}'")
+            return None
+        valores = ws.get_all_values()
+        for fila in valores[1:]:
+            if len(fila) > col_fecha and str(fila[col_fecha]).strip() == fecha_str:
+                if len(fila) <= col_tasa or not fila[col_tasa]:
+                    return None
+                num = parse_numero(fila[col_tasa])
+                if num is None or num < TASA_MIN or num > TASA_MAX:
+                    return None
+                return num
+        return None
+    except Exception as e:
+        print(f"⚠️ Historial Tasas: error leyendo: {type(e).__name__}: {e}")
+        return None
+
+
+def _tasa_de_pago(fecha_pago, hoy_txt):
+    """Devuelve la tasa aplicable para un pago del día 'fecha_pago'.
+    Si es de hoy, usa la tasa de hoy (Indicadores). Si es de otro día, la busca en el
+    historial. Devuelve None si no hay ninguna tasa válida para esa fecha."""
+    if fecha_pago == hoy_txt:
+        return _tasa_de_hoy()
+    return _tasa_de_fecha(fecha_pago)
 
 
 def _leer_tasa_dia():
@@ -2609,8 +2719,9 @@ def tasa_hoy(ack, body, client):
     texto = (body.get("text") or "").strip()
     canal = body["channel_id"]
     usuario = body["user_id"]
+    hoy_txt = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y")
 
-    # ---- Sin número: consultar la tasa actual ----
+    # ---- Sin número: consultar la tasa actual (de hoy) ----
     if not texto:
         try:
             valor, fecha = _leer_tasa_dia()
@@ -2618,7 +2729,6 @@ def tasa_hoy(ack, body, client):
                 client.chat_postEphemeral(channel=canal, user=usuario,
                     text="No hay tasa registrada aún. Fíjala con `/tasa-hoy 520,50`.")
             else:
-                hoy_txt = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y")
                 vigente = "✅ (es de hoy)" if str(fecha).strip().split()[0] == hoy_txt else "⚠️ (NO es de hoy, hay que ponerla de nuevo)"
                 client.chat_postEphemeral(channel=canal, user=usuario,
                     text=f"La tasa registrada es *Bs. {valor}* por USD (puesta el {fecha}) {vigente}.")
@@ -2628,22 +2738,47 @@ def tasa_hoy(ack, body, client):
             print(f"❌ /tasa-hoy consulta: {type(e).__name__}: {e}")
         return
 
-    # ---- Con número: fijar la tasa ----
-    # Tomar solo el primer "pedazo" para evitar que "520 50" se junte en 52050
-    primer = texto.split()[0]
+    # ---- Con número: fijar una tasa. Puede venir como "520,50" (hoy) o "03/08/2026 148,90" (un día pasado) ----
+    partes = texto.split()
+    fecha_arg = None
+    valor_arg = partes[0]
+    if len(partes) >= 2 and "/" in partes[0]:
+        fecha_arg = partes[0]
+        valor_arg = partes[1]
+        _ok_fecha, _msg_fecha = _es_fecha_valida(fecha_arg)
+        if not _ok_fecha:
+            client.chat_postEphemeral(channel=canal, user=usuario,
+                text=f"'{fecha_arg}' no es una fecha válida. {_msg_fecha} Ejemplo: `/tasa-hoy 03/08/2026 148,90`.")
+            return
+
     try:
-        valor_num = parse_numero(primer)
+        valor_num = parse_numero(valor_arg)
     except (ValueError, ZeroDivisionError, TypeError):
         client.chat_postEphemeral(channel=canal, user=usuario,
-            text=f"'{texto}' no es una tasa válida. Ejemplo: `/tasa-hoy 520,50`.")
+            text=f"'{valor_arg}' no es una tasa válida. Ejemplo: `/tasa-hoy 520,50` o `/tasa-hoy 03/08/2026 148,90` para un día pasado.")
         return
 
     # Blindaje de rango: atrapa 0, negativos y valores absurdos por tipeo
     if valor_num < TASA_MIN or valor_num > TASA_MAX:
         client.chat_postEphemeral(channel=canal, user=usuario,
-            text=f"⚠️ La tasa *{valor_num:,.4f}* parece un error de tipeo (fuera de un rango razonable). Revisa y vuelve a intentar. Ejemplo: `/tasa-hoy 520,50`.")
+            text=f"⚠️ La tasa *{valor_num:,.4f}* parece un error de tipeo (fuera de un rango razonable). Revisa y vuelve a intentar.")
         return
 
+    fecha_destino = fecha_arg or hoy_txt
+
+    # ---- Fecha de un día pasado: se guarda solo en el historial, sin tocar la tasa vigente de hoy ----
+    if fecha_destino != hoy_txt:
+        if not _guardar_en_historial_tasas(fecha_destino, valor_num):
+            client.chat_postEphemeral(channel=canal, user=usuario,
+                text=(f"❌ No pude guardar la tasa del {fecha_destino} (revisa que exista la pestaña "
+                      f"'{PESTANA_HISTORIAL_TASAS}' con columnas 'Fecha' y 'Tasa'). Intenta de nuevo."))
+            return
+        client.chat_postEphemeral(channel=canal, user=usuario,
+            text=(f"✅ Tasa fijada para el *{fecha_destino}*: Bs. {valor_num:,.4f} por USD. "
+                  f"Ya pueden reportar con /cobro los pagos atrasados de ese día."))
+        return
+
+    # ---- Fecha de hoy (con o sin escribirla explícitamente): fija la tasa vigente, como siempre ----
     # Aviso si cambia demasiado respecto a la tasa anterior (posible tipeo tipo 52050)
     aviso_cambio = ""
     try:
@@ -2663,7 +2798,6 @@ def tasa_hoy(ack, body, client):
             text="❌ No pude guardar la tasa (revisa que exista la hoja 'Indicadores'). Intenta de nuevo.")
         return
 
-    hoy_txt = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y")
     try:
         client.chat_postMessage(channel="#cobranzas-log",
             text=f"💱 <@{usuario}> fijó la *tasa del día*: Bs. {valor_num:,.4f} por USD ({hoy_txt}). Ya pueden reportar cobros.")
