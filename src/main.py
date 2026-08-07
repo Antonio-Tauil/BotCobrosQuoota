@@ -143,6 +143,16 @@ def _guardar_fila_por_encabezado(sheet, datos):
     # Cualquier dato que no tenía columna con ese nombre se agrega al final (siempre el mismo orden)
     fila.extend(restantes.values())
     sheet.append_row(fila)
+
+
+def _columna_por_nombre(ws, nombre):
+    """Ubica por NOMBRE (no por posición) el índice base-1 de una columna, comparando
+    ignorando mayúsculas, tildes y espacios de más. Devuelve None si no la encuentra."""
+    objetivo = _normalizar_encabezado(nombre)
+    encabezados = [_normalizar_encabezado(c) for c in ws.row_values(1)]
+    if objetivo in encabezados:
+        return encabezados.index(objetivo) + 1
+    return None
 # ============ FIN GUARDAR POR NOMBRE DE COLUMNA ============
 
 
@@ -173,7 +183,16 @@ def guardar_en_contactados(fecha, nombre, telefono, cedula, compromiso, cobrador
         if sheet is None:
             print(f"❌ No se encontró la hoja 'Contactados'. Hojas disponibles: {[ws.title for ws in spreadsheet.worksheets()]}")
             return
-        sheet.append_row([fecha, nombre, telefono, cedula, compromiso, cobrador, comentario])
+        datos = {
+            "Fecha": fecha,
+            "Nombre": nombre,
+            "Telefono": telefono,
+            "Cedula": cedula,
+            "Compromiso de pago": compromiso,
+            "Cobrador": cobrador,
+            "COMENTARIO": comentario,
+        }
+        _guardar_fila_por_encabezado(sheet, datos)
         print(f"✅ Contacto guardado en hoja '{sheet.title}'")
     except Exception as e:
         print(f"❌ Error guardando en Contactados: {type(e).__name__}: {e}")
@@ -339,7 +358,20 @@ def guardar_en_sheet(fecha, cobrador, descripcion, numero, cedula, monto_bs, for
         if _registro_ya_guardado(sheet, registro_id):
             print("⚠️ Cobro duplicado (ya guardado), se omite.")
             return "DUPLICADO"
-        sheet.append_row([fecha, descripcion, numero, cedula, monto_bs, forma_pago, banco, monto_usd, tasa_bcv, cobrador, registro_id])
+        datos = {
+            "Fecha": fecha,
+            "Nombre": descripcion,
+            "Telefono": numero,
+            "Cedula": cedula,
+            "MontoBs": monto_bs,
+            "FormaPago": forma_pago,
+            "Banco": banco,
+            "MontoUsd": monto_usd,
+            "TasaBCV": tasa_bcv,
+            "Cobrador": cobrador,
+            "ID Registro": registro_id,
+        }
+        _guardar_fila_por_encabezado(sheet, datos)
         print("✅ Cobro guardado en Google Sheets")
         return "OK"
     except Exception as e:
@@ -549,7 +581,18 @@ def guardar_en_domiciliacion(fecha, empresa, cuenta, monto_bs, banco, monto_usd,
         if _registro_ya_guardado(sheet, registro_id):
             print("⚠️ Domiciliación duplicada (ya guardada), se omite.")
             return "DUPLICADO"
-        sheet.append_row([fecha, empresa, cuenta, monto_bs, banco, monto_usd, tasa_bcv, cobrador, registro_id])
+        datos = {
+            "Fecha": fecha,
+            "Empresa": empresa,
+            "Cuenta por cobrar Bs": cuenta,
+            "Monto recuperado Bs": monto_bs,
+            "Banco": banco,
+            "MontoUsd": monto_usd,
+            "TasaBCV": tasa_bcv,
+            "Cobrador": cobrador,
+            "ID Registro": registro_id,
+        }
+        _guardar_fila_por_encabezado(sheet, datos)
         print(f"✅ Domiciliación guardada en hoja '{sheet.title}'")
         return "OK"
     except Exception as e:
@@ -720,7 +763,20 @@ def guardar_en_sheet_cobro2(fecha, nombre, telefono, cedula, monto_bs, forma_pag
         if _registro_ya_guardado(sheet, registro_id):
             print("⚠️ Cobro Call Center duplicado (ya guardado), se omite.")
             return "DUPLICADO"
-        sheet.append_row([fecha, nombre, telefono, cedula, monto_bs, forma_pago, banco, monto_usd, tasa_bcv, referencia, registro_id])
+        datos = {
+            "Fecha": fecha,
+            "Nombre": nombre,
+            "Telefono": telefono,
+            "Cedula": cedula,
+            "MontoBs": monto_bs,
+            "FormaPago": forma_pago,
+            "Banco": banco,
+            "MontoUsd": monto_usd,
+            "TasaBCV": tasa_bcv,
+            "Nº referencia pago": referencia,
+            "ID Registro": registro_id,
+        }
+        _guardar_fila_por_encabezado(sheet, datos)
         print("✅ Cobro (Call Center) guardado en Google Sheets")
         return "OK"
     except Exception as e:
@@ -913,9 +969,22 @@ def guardar_en_conciliacion(fecha_conciliacion, cliente_nombre, cedula, referenc
         if _registro_ya_guardado(sheet, registro_id):
             print("⚠️ Conciliación duplicada (ya guardada), se omite.")
             return "DUPLICADO"
-        sheet.append_row([fecha_conciliacion, cliente_nombre, cedula, referencia, banco,
-                          monto_reportado, monto_banco, diferencia, estado,
-                          fecha_movimiento, conciliador, observaciones, registro_id])
+        datos = {
+            "Fecha conciliación": fecha_conciliacion,
+            "Cliente": cliente_nombre,
+            "Cédula": cedula,
+            "Referencia": referencia,
+            "Banco": banco,
+            "Monto reportado": monto_reportado,
+            "Monto banco": monto_banco,
+            "Diferencia": diferencia,
+            "Estado": estado,
+            "Fecha movimiento": fecha_movimiento,
+            "Conciliador": conciliador,
+            "Observaciones": observaciones,
+            "ID Registro": registro_id,
+        }
+        _guardar_fila_por_encabezado(sheet, datos)
         print(f"✅ Conciliación guardada en hoja '{sheet.title}'")
         return "OK"
     except Exception as e:
@@ -1115,6 +1184,9 @@ def _abrir_hoja_liquidaciones():
     )
     cliente = gspread.authorize(creds)
     spreadsheet = cliente.open_by_key(SHEET_ID_LIQUIDACIONES)
+    for ws in spreadsheet.worksheets():
+        if _normalizar_encabezado(ws.title) == _normalizar_encabezado("Liquidacion VIP"):
+            return ws
     try:
         return spreadsheet.worksheet("Hoja1")
     except Exception:
@@ -1131,7 +1203,16 @@ def guardar_liquidacion_nueva(fecha, nombre, cedula, cliente_empresa, base, esta
         if _registro_ya_guardado(sheet, registro_id):
             print("⚠️ Liquidación duplicada (ya guardada), se omite.")
             return "DUPLICADO"
-        sheet.append_row([fecha, nombre, cedula, cliente_empresa, base, estatus, fecha, registro_id])
+        _guardar_fila_por_encabezado(sheet, {
+            "Fecha de Registro": fecha,
+            "Nombre": nombre,
+            "Cedula": cedula,
+            "Clientes/Empresas": cliente_empresa,
+            "Base": base,
+            "Estatus": estatus,
+            "Ultima actualizacion": fecha,
+            "ID Registro": registro_id,
+        })
         print(f"✅ Liquidación nueva guardada: {nombre} ({cedula})")
         return "OK"
     except Exception as e:
@@ -1142,15 +1223,23 @@ def guardar_liquidacion_nueva(fecha, nombre, cedula, cliente_empresa, base, esta
 def actualizar_estatus_liquidacion(cedula, nuevo_estatus, fecha_actualizacion):
     try:
         sheet = _abrir_hoja_liquidaciones()
+        col_cedula = _columna_por_nombre(sheet, "Cedula")
+        col_estatus = _columna_por_nombre(sheet, "Estatus")
+        col_actualizacion = _columna_por_nombre(sheet, "Ultima actualizacion")
+        if col_cedula is None or col_estatus is None or col_actualizacion is None:
+            print("❌ Error actualizando estatus: faltan las columnas 'Cedula', 'Estatus' y/o "
+                  "'Ultima actualizacion' en la pestaña de Liquidaciones.")
+            return False
         valores = sheet.get_all_values()
         cedula_buscada = str(cedula).strip()
+        idx_cedula = col_cedula - 1
         for i, fila in enumerate(valores):
             if i == 0:
                 continue
-            if len(fila) > 2 and fila[2].strip() == cedula_buscada:
+            if len(fila) > idx_cedula and fila[idx_cedula].strip() == cedula_buscada:
                 num_fila = i + 1
-                sheet.update_cell(num_fila, 6, nuevo_estatus)
-                sheet.update_cell(num_fila, 7, fecha_actualizacion)
+                sheet.update_cell(num_fila, col_estatus, nuevo_estatus)
+                sheet.update_cell(num_fila, col_actualizacion, fecha_actualizacion)
                 print(f"✅ Estatus actualizado para cédula {cedula_buscada}: {nuevo_estatus}")
                 return True
         print(f"⚠️ No se encontró la cédula {cedula_buscada} en Liquidaciones")
@@ -1388,14 +1477,33 @@ def guardar_en_sheet_comercial(fecha, nombre, telefono, cedula, monto_bs, forma_
         )
         cliente = gspread.authorize(creds)
         spreadsheet = cliente.open_by_key(SHEET_ID_COMERCIAL)
-        try:
-            sheet = spreadsheet.worksheet("Sheet1")
-        except Exception:
-            sheet = spreadsheet.sheet1
+        sheet = None
+        for ws in spreadsheet.worksheets():
+            if ws.title.strip().lower() == "pagos":
+                sheet = ws
+                break
+        if sheet is None:
+            try:
+                sheet = spreadsheet.worksheet("Sheet1")
+            except Exception:
+                sheet = spreadsheet.sheet1  # respaldo: la primera pestaña, por si cambia el nombre
         if _registro_ya_guardado(sheet, registro_id):
             print("⚠️ Cobro comercial duplicado (ya guardado), se omite.")
             return "DUPLICADO"
-        sheet.append_row([fecha, nombre, telefono, cedula, monto_bs, forma_pago, banco, monto_usd, tasa_bcv, empresa, registro_id])
+        datos = {
+            "Fecha": fecha,
+            "Nombre Cliente": nombre,
+            "Telefono": telefono,
+            "Cedula": cedula,
+            "MontoBs": monto_bs,
+            "FormaPago": forma_pago,
+            "Banco": banco,
+            "MontoUsd": monto_usd,
+            "TasaBCV": tasa_bcv,
+            "Empresa": empresa,
+            "ID Registro": registro_id,
+        }
+        _guardar_fila_por_encabezado(sheet, datos)
         print("✅ Cobro (Comercial) guardado en Google Sheets")
         return "OK"
     except Exception as e:
@@ -1584,7 +1692,17 @@ def guardar_en_contactados_legal(fecha, nombre, telefono, cedula, compromiso, co
         if _registro_ya_guardado(sheet, registro_id):
             print("⚠️ Contacto legal duplicado (ya guardado), se omite.")
             return "DUPLICADO"
-        sheet.append_row([fecha, nombre, telefono, cedula, compromiso, cobrador, comentario, registro_id])
+        datos = {
+            "Fecha": fecha,
+            "Nombre": nombre,
+            "Telefono": telefono,
+            "Cedula": cedula,
+            "Compromiso de pago": compromiso,
+            "Cobrador": cobrador,
+            "COMENTARIO": comentario,
+            "ID Registro": registro_id,
+        }
+        _guardar_fila_por_encabezado(sheet, datos)
         print(f"✅ Contacto (Legal) guardado en hoja '{sheet.title}'")
         return "OK"
     except Exception as e:
@@ -1792,7 +1910,15 @@ def guardar_cliente_escalado(fecha, nombre, telefono, cedula, empresa, incidenci
         if sheet is None:
             print(f"❌ No se encontró la hoja 'Clientes escalados'. Hojas disponibles: {[ws.title for ws in spreadsheet.worksheets()]}")
             return
-        sheet.append_row([fecha, nombre, telefono, cedula, empresa, incidencia, reportada_por])
+        _guardar_fila_por_encabezado(sheet, {
+            "Fecha": fecha,
+            "Nombre": nombre,
+            "Telefono": telefono,
+            "Cedula": cedula,
+            "Empresa": empresa,
+            "Incidencia": incidencia,
+            "Reportada por": reportada_por,
+        })
         print(f"✅ Cliente escalado guardado en hoja '{sheet.title}'")
     except Exception as e:
         print(f"❌ Error guardando en Clientes escalados: {type(e).__name__}: {e}")
