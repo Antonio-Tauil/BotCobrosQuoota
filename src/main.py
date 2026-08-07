@@ -344,6 +344,11 @@ def _extraer_valores_formulario(spec, valores_view):
             datos[bid] = (estado.get("selected_option") or {}).get("value", "")
         else:
             datos[bid] = estado.get("value") or ""
+    if spec.get("calcular"):
+        # Algunos comandos (montos en Bs/USD, tasas) necesitan calcular/formatear campos
+        # antes de guardar y de publicar el mensaje — la ficha aporta esa función, y el
+        # resultado se calcula UNA sola vez aquí (no se vuelve a calcular al aprobar).
+        datos.update(spec["calcular"](datos))
     return datos
 
 
@@ -361,7 +366,13 @@ def _guardar_generico(nombre_spec, datos_campos, fecha, registro_id=""):
         return "DUPLICADO"
     datos_sheet = {}
     if spec.get("agregar_fecha"):
-        datos_sheet[spec["agregar_fecha"]] = fecha
+        # Acepta un solo nombre de columna o una lista (algunos comandos, como
+        # Liquidaciones, ponen la fecha de hoy en más de una columna a la vez).
+        columnas_fecha = spec["agregar_fecha"]
+        if isinstance(columnas_fecha, str):
+            columnas_fecha = [columnas_fecha]
+        for columna_fecha in columnas_fecha:
+            datos_sheet[columna_fecha] = fecha
     for block_id, columna in spec["columnas"].items():
         datos_sheet[columna] = datos_campos.get(block_id, "")
     if spec.get("columna_id_registro"):
@@ -706,107 +717,29 @@ def rechazar(ack, body, client):
 # ============ FIN COMANDO /cobro ============
 
 
-# ============ COMANDO /domiciliar ============
-def guardar_en_domiciliacion(fecha, empresa, cuenta, monto_bs, banco, monto_usd, tasa_bcv, cobrador, registro_id=""):
-    try:
-        creds_json = json.loads(os.environ["GOOGLE_CREDENTIALS"])
-        creds_json["private_key"] = creds_json["private_key"].replace("\\n", "\n")
-        creds = Credentials.from_service_account_info(
-            creds_json,
-            scopes=["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-        )
-        cliente = gspread.authorize(creds)
-        spreadsheet = cliente.open_by_key(os.environ["SHEET_ID"])
-        sheet = None
-        for ws in spreadsheet.worksheets():
-            titulo = ws.title.strip().lower()
-            if titulo in ("domiciliación", "domiciliacion"):
-                sheet = ws
-                break
-        if sheet is None:
-            print(f"❌ No se encontró la hoja 'Domiciliación'. Hojas disponibles: {[ws.title for ws in spreadsheet.worksheets()]}")
-            return "ERROR"
-        if _registro_ya_guardado(sheet, registro_id):
-            print("⚠️ Domiciliación duplicada (ya guardada), se omite.")
-            return "DUPLICADO"
-        datos = {
-            "Fecha": fecha,
-            "Empresa": empresa,
-            "Cuenta por cobrar Bs": cuenta,
-            "Monto recuperado Bs": monto_bs,
-            "Banco": banco,
-            "MontoUsd": monto_usd,
-            "TasaBCV": tasa_bcv,
-            "Cobrador": cobrador,
-            "ID Registro": registro_id,
-        }
-        _guardar_fila_por_encabezado(sheet, datos)
-        print(f"✅ Domiciliación guardada en hoja '{sheet.title}'")
-        return "OK"
-    except Exception as e:
-        print(f"❌ Error guardando en Domiciliación: {type(e).__name__}: {e}")
-        return "ERROR"
-
-
-@app.command("/domiciliar")
-def reportar_domiciliacion(ack, body, client):
-    ack()
-    client.views_open(
-        trigger_id=body["trigger_id"],
-        view={
-            "type": "modal",
-            "callback_id": "form_domiciliar",
-            "title": {"type": "plain_text", "text": "Registrar Domiciliación"},
-            "submit": {"type": "plain_text", "text": "Enviar"},
-            "blocks": [
-                {"type": "input", "block_id": "empresa",
-                 "label": {"type": "plain_text", "text": "Empresa"},
-                 "element": {"type": "plain_text_input", "action_id": "valor"}},
-                {"type": "input", "block_id": "cuenta",
-                 "label": {"type": "plain_text", "text": "Cuenta por cobrar"},
-                 "element": {"type": "plain_text_input", "action_id": "valor"}},
-                {"type": "input", "block_id": "monto_bs",
-                 "label": {"type": "plain_text", "text": "Monto en Bs"},
-                 "element": {"type": "plain_text_input", "action_id": "valor"}},
-                {"type": "input", "block_id": "banco",
-                 "label": {"type": "plain_text", "text": "Banco"},
-                 "element": {"type": "static_select", "action_id": "valor",
-                             "placeholder": {"type": "plain_text", "text": "Selecciona"},
-                             "options": [
-                                 {"text": {"type": "plain_text", "text": "BDV - Banco de Venezuela"}, "value": "BDV"},
-                                 {"text": {"type": "plain_text", "text": "BNC - Banco Nacional de Crédito"}, "value": "BNC"},
-                                 {"text": {"type": "plain_text", "text": "BOD"}, "value": "BOD"},
-                                 {"text": {"type": "plain_text", "text": "Mercantil"}, "value": "Mercantil"},
-                                 {"text": {"type": "plain_text", "text": "Provincial"}, "value": "Provincial"},
-                                 {"text": {"type": "plain_text", "text": "Bicentenario"}, "value": "Bicentenario"},
-                                 {"text": {"type": "plain_text", "text": "Banesco"}, "value": "Banesco"},
-                                 {"text": {"type": "plain_text", "text": "Otro"}, "value": "Otro"}
-                             ]}},
-                {"type": "input", "block_id": "tasa_bcv",
-                 "label": {"type": "plain_text", "text": "Tasa BCV (Bs por USD)"},
-                 "element": {"type": "plain_text_input", "action_id": "valor"}},
-                {"type": "input", "block_id": "cobrador",
-                 "label": {"type": "plain_text", "text": "Cobrador"},
-                 "element": {"type": "static_select", "action_id": "valor",
-                             "placeholder": {"type": "plain_text", "text": "Selecciona"},
-                             "options": _opciones_cobradores()}}
-            ]
-        }
+# ============ COMANDO /domiciliar (usando el Motor Genérico) ============
+def _abrir_hoja_domiciliacion():
+    creds_json = json.loads(os.environ["GOOGLE_CREDENTIALS"])
+    creds_json["private_key"] = creds_json["private_key"].replace("\\n", "\n")
+    creds = Credentials.from_service_account_info(
+        creds_json,
+        scopes=["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
     )
+    cliente = gspread.authorize(creds)
+    spreadsheet = cliente.open_by_key(os.environ["SHEET_ID"])
+    for ws in spreadsheet.worksheets():
+        if ws.title.strip().lower() in ("domiciliación", "domiciliacion"):
+            return ws
+    print(f"❌ No se encontró la hoja 'Domiciliación'. Hojas disponibles: {[ws.title for ws in spreadsheet.worksheets()]}")
+    return None
 
 
-@app.view("form_domiciliar")
-def recibir_domiciliacion(ack, body, client):
-    ack()
-    valores = body["view"]["state"]["values"]
-    empresa = valores["empresa"]["valor"]["value"]
-    cuenta = valores["cuenta"]["valor"]["value"]
-    monto_bs_str = valores["monto_bs"]["valor"]["value"]
-    banco = valores["banco"]["valor"]["selected_option"]["value"]
-    tasa_bcv_str = valores["tasa_bcv"]["valor"]["value"]
-    cobrador = valores["cobrador"]["valor"]["selected_option"]["value"]
-    usuario_slack = body["user"]["id"]
-    fecha = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y")
+def _calcular_domiciliacion(datos):
+    """Calcula y formatea Monto Bs / Monto USD / Cuenta por cobrar, igual que hacía
+    el comando antes de esta migración (mismas cuentas, mismo formato Bs./$)."""
+    monto_bs_str = datos.get("monto_bs", "")
+    tasa_bcv_str = datos.get("tasa_bcv", "")
+    cuenta_str = datos.get("cuenta", "")
     try:
         monto_bs_num = parse_numero(monto_bs_str)
         tasa_bcv_num = parse_numero(tasa_bcv_str)
@@ -816,80 +749,75 @@ def recibir_domiciliacion(ack, body, client):
         monto_usd_str = "(No calculable)"
         monto_bs_fmt = f"Bs. {monto_bs_str}"
     try:
-        cuenta_num = parse_numero(cuenta)
+        cuenta_num = parse_numero(cuenta_str)
         cuenta_fmt = f"Bs. {cuenta_num:,.2f}"
     except (ValueError, AttributeError):
-        cuenta_fmt = f"Bs. {cuenta}"
-    texto = (
-        f"*Nueva domiciliación reportada* 🏦\n"
-        f"*Fecha:* {fecha}\n"
-        f"*Reportado por:* <@{usuario_slack}>\n"
-        f"*Empresa:* {empresa}\n"
-        f"*Cuenta por cobrar:* {cuenta_fmt}\n"
-        f"*Monto Bs:* {monto_bs_fmt}\n"
-        f"*Banco:* {banco}\n"
-        f"*Tasa BCV:* {tasa_bcv_str}\n"
-        f"*Monto USD:* {monto_usd_str}\n"
-        f"*Cobrador:* {cobrador}"
-    )
-    try:
-        client.chat_postMessage(
-            channel="#cobranzas-domiciliacion",
-            text="Nueva domiciliación reportada",
-            metadata={"event_type": "domiciliacion_reportada", "event_payload": {
-                "fecha": fecha, "empresa": empresa, "cuenta": cuenta_fmt, "monto_bs": monto_bs_fmt,
-                "banco": banco, "monto_usd": monto_usd_str, "tasa_bcv": tasa_bcv_str, "cobrador": cobrador}},
-            blocks=[
-                {"type": "section", "text": {"type": "mrkdwn", "text": texto}},
-                {"type": "actions", "elements": [
-                    {"type": "button", "text": {"type": "plain_text", "text": "✅ Aprobar"}, "style": "primary", "action_id": "aprobar_domiciliacion"},
-                    {"type": "button", "text": {"type": "plain_text", "text": "❌ Rechazar"}, "style": "danger", "action_id": "rechazar_domiciliacion"}
-                ]}
-            ]
-        )
-    except Exception as e:
-        print(f"⚠️ No se pudo enviar mensaje al canal de domiciliación: {e}")
+        cuenta_fmt = f"Bs. {cuenta_str}"
+    return {"monto_bs": monto_bs_fmt, "monto_usd": monto_usd_str, "cuenta": cuenta_fmt}
+
+
+FORM_SPECS["domiciliar"] = {
+    "callback_id": "form_domiciliar",
+    "titulo": "Registrar Domiciliación",
+    "campos": [
+        {"id": "empresa", "label": "Empresa", "tipo": "texto"},
+        {"id": "cuenta", "label": "Cuenta por cobrar", "tipo": "texto"},
+        {"id": "monto_bs", "label": "Monto en Bs", "tipo": "texto"},
+        {"id": "banco", "label": "Banco", "tipo": "select", "opciones": [
+            {"text": {"type": "plain_text", "text": "BDV - Banco de Venezuela"}, "value": "BDV"},
+            {"text": {"type": "plain_text", "text": "BNC - Banco Nacional de Crédito"}, "value": "BNC"},
+            {"text": {"type": "plain_text", "text": "BOD"}, "value": "BOD"},
+            {"text": {"type": "plain_text", "text": "Mercantil"}, "value": "Mercantil"},
+            {"text": {"type": "plain_text", "text": "Provincial"}, "value": "Provincial"},
+            {"text": {"type": "plain_text", "text": "Bicentenario"}, "value": "Bicentenario"},
+            {"text": {"type": "plain_text", "text": "Banesco"}, "value": "Banesco"},
+            {"text": {"type": "plain_text", "text": "Otro"}, "value": "Otro"},
+        ]},
+        {"id": "tasa_bcv", "label": "Tasa BCV (Bs por USD)", "tipo": "texto"},
+        {"id": "cobrador", "label": "Cobrador", "tipo": "select", "opciones": _opciones_cobradores},
+    ],
+    "calcular": _calcular_domiciliacion,
+    "abrir_hoja": _abrir_hoja_domiciliacion,
+    "agregar_fecha": "Fecha",
+    "columnas": {
+        "empresa": "Empresa", "cuenta": "Cuenta por cobrar Bs", "monto_bs": "Monto recuperado Bs",
+        "banco": "Banco", "monto_usd": "MontoUsd", "tasa_bcv": "TasaBCV", "cobrador": "Cobrador",
+    },
+    "columna_id_registro": "ID Registro",
+    "anti_duplicado": True,
+    "prefijo_id": "DOMIC",
+    "canal": "#cobranzas-domiciliacion",
+    "titulo_mensaje": "Nueva domiciliación reportada",
+    "emoji_mensaje": "🏦",
+    "campos_mensaje": [
+        ("Empresa", "empresa"), ("Cuenta por cobrar", "cuenta"), ("Monto Bs", "monto_bs"),
+        ("Banco", "banco"), ("Tasa BCV", "tasa_bcv"), ("Monto USD", "monto_usd"), ("Cobrador", "cobrador"),
+    ],
+}
+
+
+@app.command("/domiciliar")
+def reportar_domiciliacion(ack, body, client):
+    ack()
+    _abrir_formulario_generico("domiciliar", body["trigger_id"], client)
+
+
+@app.view("form_domiciliar")
+def recibir_domiciliacion(ack, body, client):
+    ack()
+    _publicar_para_aprobacion("domiciliar", body, client)
 
 
 @app.action("aprobar_domiciliacion")
 def aprobar_domiciliacion(ack, body, client):
     ack()
-    texto_original = body["message"]["blocks"][0]["text"]["text"]
-    if _ya_procesado(texto_original):
-        return
-    fecha_revision = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y")
-    registro_id = _id_amigable("DOMIC", body["message"]["ts"])
-    resultado = "ERROR"
-    try:
-        meta = body["message"].get("metadata", {}).get("event_payload", {})
-        resultado = guardar_en_domiciliacion(
-            meta.get("fecha", fecha_revision), meta.get("empresa", ""), meta.get("cuenta", ""),
-            meta.get("monto_bs", ""), meta.get("banco", ""), meta.get("monto_usd", ""),
-            meta.get("tasa_bcv", ""), meta.get("cobrador", ""), registro_id)
-    except Exception as e:
-        print(f"Error: {e}")
-    if resultado == "DUPLICADO":
-        encabezado = f"⚠️ *YA REGISTRADA* — esta domiciliación ya estaba guardada, no se duplicó. Revisado por <@{body['user']['id']}> el {fecha_revision}"
-    else:
-        encabezado = f"✅ *APROBADO* por <@{body['user']['id']}> el {fecha_revision}"
-    client.chat_update(
-        channel=body["channel"]["id"], ts=body["message"]["ts"], text="Domiciliación procesada",
-        blocks=[{"type": "section", "text": {"type": "mrkdwn", "text": f"{encabezado}\n\n{texto_original}"}}]
-    )
+    _aprobar_generico("domiciliar", body, client)
 
 
 @app.action("rechazar_domiciliacion")
 def rechazar_domiciliacion(ack, body, client):
     ack()
-    texto_original = body["message"]["blocks"][0]["text"]["text"]
-    if _ya_procesado(texto_original):
-        return
-    fecha_revision = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y")
-    client.chat_update(
-        channel=body["channel"]["id"], ts=body["message"]["ts"], text="Domiciliación RECHAZADA",
-        blocks=[{"type": "section", "text": {"type": "mrkdwn",
-                 "text": f"❌ *RECHAZADO* por <@{body['user']['id']}> el {fecha_revision}\n\n{texto_original}"}}]
-    )
+    _rechazar_generico("domiciliar", body, client)
 # ============ FIN COMANDO /domiciliar ============
 
 
@@ -1345,27 +1273,33 @@ def _opciones_lista(lista):
     return [{"text": {"type": "plain_text", "text": x}, "value": x} for x in lista]
 
 
-def guardar_liquidacion_nueva(fecha, nombre, cedula, cliente_empresa, base, estatus, registro_id=""):
-    try:
-        sheet = _abrir_hoja_liquidaciones()
-        if _registro_ya_guardado(sheet, registro_id):
-            print("⚠️ Liquidación duplicada (ya guardada), se omite.")
-            return "DUPLICADO"
-        _guardar_fila_por_encabezado(sheet, {
-            "Fecha de Registro": fecha,
-            "Nombre": nombre,
-            "Cedula": cedula,
-            "Clientes/Empresas": cliente_empresa,
-            "Base": base,
-            "Estatus": estatus,
-            "Ultima actualizacion": fecha,
-            "ID Registro": registro_id,
-        })
-        print(f"✅ Liquidación nueva guardada: {nombre} ({cedula})")
-        return "OK"
-    except Exception as e:
-        print(f"❌ Error guardando liquidación nueva: {type(e).__name__}: {e}")
-        return "ERROR"
+FORM_SPECS["liquidacion_nueva"] = {
+    "callback_id": "form_liquidacion_nueva",
+    "titulo": "Nueva Liquidación",
+    "campos": [
+        {"id": "nombre", "label": "Nombre completo", "tipo": "texto"},
+        {"id": "cedula", "label": "Cédula", "tipo": "texto", "validar": "cedula"},
+        {"id": "cliente", "label": "Cliente / Empresa", "tipo": "texto"},
+        {"id": "base", "label": "Base", "tipo": "select", "opciones": lambda: _opciones_lista(BASES_LIQUIDACION)},
+        {"id": "estatus", "label": "Estatus inicial", "tipo": "select", "opciones": lambda: _opciones_lista(ESTATUS_LIQUIDACION)},
+    ],
+    "abrir_hoja": _abrir_hoja_liquidaciones,
+    "agregar_fecha": ["Fecha de Registro", "Ultima actualizacion"],
+    "columnas": {
+        "nombre": "Nombre", "cedula": "Cedula", "cliente": "Clientes/Empresas",
+        "base": "Base", "estatus": "Estatus",
+    },
+    "columna_id_registro": "ID Registro",
+    "anti_duplicado": True,
+    "prefijo_id": "LIQNUEVA",
+    "canal": CANAL_LIQUIDACIONES,
+    "titulo_mensaje": "Nueva persona en Lista VIP",
+    "emoji_mensaje": "🌟",
+    "campos_mensaje": [
+        ("Nombre", "nombre"), ("Cédula", "cedula"), ("Cliente/Empresa", "cliente"),
+        ("Base", "base"), ("Estatus", "estatus"),
+    ],
+}
 
 
 def actualizar_estatus_liquidacion(cedula, nuevo_estatus, fecha_actualizacion):
@@ -1400,118 +1334,30 @@ def actualizar_estatus_liquidacion(cedula, nuevo_estatus, fecha_actualizacion):
 @app.command("/liquidacion-nueva")
 def reportar_liquidacion_nueva(ack, body, client):
     ack()
-    client.views_open(
-        trigger_id=body["trigger_id"],
-        view={
-            "type": "modal", "callback_id": "form_liquidacion_nueva",
-            "title": {"type": "plain_text", "text": "Nueva Liquidación"},
-            "submit": {"type": "plain_text", "text": "Enviar"},
-            "blocks": [
-                {"type": "input", "block_id": "nombre",
-                 "label": {"type": "plain_text", "text": "Nombre completo"},
-                 "element": {"type": "plain_text_input", "action_id": "valor"}},
-                {"type": "input", "block_id": "cedula",
-                 "label": {"type": "plain_text", "text": "Cédula"},
-                 "element": {"type": "plain_text_input", "action_id": "valor"}},
-                {"type": "input", "block_id": "cliente",
-                 "label": {"type": "plain_text", "text": "Cliente / Empresa"},
-                 "element": {"type": "plain_text_input", "action_id": "valor"}},
-                {"type": "input", "block_id": "base",
-                 "label": {"type": "plain_text", "text": "Base"},
-                 "element": {"type": "static_select", "action_id": "valor",
-                             "placeholder": {"type": "plain_text", "text": "Selecciona"},
-                             "options": _opciones_lista(BASES_LIQUIDACION)}},
-                {"type": "input", "block_id": "estatus",
-                 "label": {"type": "plain_text", "text": "Estatus inicial"},
-                 "element": {"type": "static_select", "action_id": "valor",
-                             "placeholder": {"type": "plain_text", "text": "Selecciona"},
-                             "options": _opciones_lista(ESTATUS_LIQUIDACION)}}
-            ]
-        }
-    )
+    _abrir_formulario_generico("liquidacion_nueva", body["trigger_id"], client)
 
 
 @app.view("form_liquidacion_nueva")
 def recibir_liquidacion_nueva(ack, body, client):
-    _v = body["view"]["state"]["values"]
-    _err = _validar_view(_v, [('cedula', 'cedula')])
-    if _err:
-        ack(response_action="errors", errors=_err)
+    valores_view = body["view"]["state"]["values"]
+    errores = _validar_formulario_generico("liquidacion_nueva", valores_view)
+    if errores:
+        ack(response_action="errors", errors=errores)
         return
     ack()
-    valores = body["view"]["state"]["values"]
-    nombre = valores["nombre"]["valor"]["value"]
-    cedula = valores["cedula"]["valor"]["value"]
-    cliente_empresa = valores["cliente"]["valor"]["value"]
-    base = valores["base"]["valor"]["selected_option"]["value"]
-    estatus = valores["estatus"]["valor"]["selected_option"]["value"]
-    usuario_slack = body["user"]["id"]
-    fecha = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y")
-    texto = (
-        f"*Nueva persona en Lista VIP* 🌟\n"
-        f"*Fecha:* {fecha}\n"
-        f"*Reportado por:* <@{usuario_slack}>\n"
-        f"*Nombre:* {nombre}\n"
-        f"*Cédula:* {cedula}\n"
-        f"*Cliente/Empresa:* {cliente_empresa}\n"
-        f"*Base:* {base}\n"
-        f"*Estatus:* {estatus}"
-    )
-    try:
-        client.chat_postMessage(
-            channel=CANAL_LIQUIDACIONES,
-            text="Nueva persona en Lista VIP",
-            metadata={"event_type": "liquidacion_nueva", "event_payload": {
-                "fecha": fecha, "nombre": nombre, "cedula": cedula,
-                "cliente": cliente_empresa, "base": base, "estatus": estatus}},
-            blocks=[
-                {"type": "section", "text": {"type": "mrkdwn", "text": texto}},
-                {"type": "actions", "elements": [
-                    {"type": "button", "text": {"type": "plain_text", "text": "✅ Aprobar"}, "style": "primary", "action_id": "aprobar_liquidacion_nueva"},
-                    {"type": "button", "text": {"type": "plain_text", "text": "❌ Rechazar"}, "style": "danger", "action_id": "rechazar_liquidacion_nueva"}
-                ]}
-            ]
-        )
-    except Exception as e:
-        print(f"⚠️ No se pudo enviar mensaje al canal de liquidaciones: {e}")
+    _publicar_para_aprobacion("liquidacion_nueva", body, client)
 
 
 @app.action("aprobar_liquidacion_nueva")
 def aprobar_liquidacion_nueva(ack, body, client):
     ack()
-    texto_original = body["message"]["blocks"][0]["text"]["text"]
-    if _ya_procesado(texto_original):
-        return
-    fecha_revision = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y")
-    registro_id = _id_amigable("LIQNUEVA", body["message"]["ts"])
-    meta = body["message"].get("metadata", {}).get("event_payload", {})
-    resultado = guardar_liquidacion_nueva(
-        meta.get("fecha", fecha_revision), meta.get("nombre", ""), meta.get("cedula", ""),
-        meta.get("cliente", ""), meta.get("base", ""), meta.get("estatus", ""), registro_id)
-    if resultado == "DUPLICADO":
-        encabezado = f"⚠️ *YA REGISTRADA* — ya estaba guardada, no se duplicó. Revisado por <@{body['user']['id']}> el {fecha_revision}"
-    elif resultado == "OK":
-        encabezado = f"✅ *APROBADO* por <@{body['user']['id']}> el {fecha_revision}"
-    else:
-        encabezado = f"⚠️ *APROBADO pero hubo error guardando (revisar logs)* por <@{body['user']['id']}> el {fecha_revision}"
-    client.chat_update(
-        channel=body["channel"]["id"], ts=body["message"]["ts"], text="Liquidación procesada",
-        blocks=[{"type": "section", "text": {"type": "mrkdwn", "text": f"{encabezado}\n\n{texto_original}"}}]
-    )
+    _aprobar_generico("liquidacion_nueva", body, client)
 
 
 @app.action("rechazar_liquidacion_nueva")
 def rechazar_liquidacion_nueva(ack, body, client):
     ack()
-    texto_original = body["message"]["blocks"][0]["text"]["text"]
-    if _ya_procesado(texto_original):
-        return
-    fecha_revision = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y")
-    client.chat_update(
-        channel=body["channel"]["id"], ts=body["message"]["ts"], text="Liquidación RECHAZADA",
-        blocks=[{"type": "section", "text": {"type": "mrkdwn",
-                 "text": f"❌ *RECHAZADO* por <@{body['user']['id']}> el {fecha_revision}\n\n{texto_original}"}}]
-    )
+    _rechazar_generico("liquidacion_nueva", body, client)
 
 
 @app.command("/liquidacion-estatus")
