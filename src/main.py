@@ -1692,6 +1692,7 @@ FORM_SPECS["contacto_legal"] = {
         {"id": "cobrador", "label": "Cobrador", "tipo": "select", "opciones": [
             {"text": {"type": "plain_text", "text": "Maria"}, "value": "Maria"},
             {"text": {"type": "plain_text", "text": "Gabriela"}, "value": "Gabriela"},
+            {"text": {"type": "plain_text", "text": "Karolay"}, "value": "Karolay"},
         ]},
         {"id": "comentario", "label": "Comentario", "tipo": "texto", "multiline": True},
     ],
