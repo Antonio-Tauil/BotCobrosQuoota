@@ -940,130 +940,29 @@ def rechazar_cobro2(ack, body, client):
 # ============ FIN COMANDO /cobro-callcenter ============
 
 
-# ============ COMANDO /conciliar ============
-def guardar_en_conciliacion(fecha_conciliacion, cliente_nombre, cedula, referencia, banco,
-                            monto_reportado, monto_banco, diferencia, estado,
-                            fecha_movimiento, conciliador, observaciones, registro_id=""):
-    try:
-        creds_json = json.loads(os.environ["GOOGLE_CREDENTIALS"])
-        creds_json["private_key"] = creds_json["private_key"].replace("\\n", "\n")
-        creds = Credentials.from_service_account_info(
-            creds_json,
-            scopes=["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-        )
-        cliente = gspread.authorize(creds)
-        spreadsheet = cliente.open_by_key(os.environ["SHEET_ID"])
-        sheet = None
-        for ws in spreadsheet.worksheets():
-            titulo = ws.title.strip().lower()
-            if titulo in ("conciliación", "conciliacion"):
-                sheet = ws
-                break
-        if sheet is None:
-            print(f"❌ No se encontró la hoja 'Conciliación'. Hojas disponibles: {[ws.title for ws in spreadsheet.worksheets()]}")
-            return "ERROR"
-        if _registro_ya_guardado(sheet, registro_id):
-            print("⚠️ Conciliación duplicada (ya guardada), se omite.")
-            return "DUPLICADO"
-        datos = {
-            "Fecha conciliación": fecha_conciliacion,
-            "Cliente": cliente_nombre,
-            "Cédula": cedula,
-            "Referencia": referencia,
-            "Banco": banco,
-            "Monto reportado": monto_reportado,
-            "Monto banco": monto_banco,
-            "Diferencia": diferencia,
-            "Estado": estado,
-            "Fecha movimiento": fecha_movimiento,
-            "Conciliador": conciliador,
-            "Observaciones": observaciones,
-            "ID Registro": registro_id,
-        }
-        _guardar_fila_por_encabezado(sheet, datos)
-        print(f"✅ Conciliación guardada en hoja '{sheet.title}'")
-        return "OK"
-    except Exception as e:
-        print(f"❌ Error guardando en Conciliación: {type(e).__name__}: {e}")
-        return "ERROR"
-
-
-@app.command("/conciliar")
-def reportar_conciliacion(ack, body, client):
-    ack()
-    client.views_open(
-        trigger_id=body["trigger_id"],
-        view={
-            "type": "modal",
-            "callback_id": "form_conciliar",
-            "title": {"type": "plain_text", "text": "Conciliar Pago"},
-            "submit": {"type": "plain_text", "text": "Enviar"},
-            "blocks": [
-                {"type": "input", "block_id": "cliente",
-                 "label": {"type": "plain_text", "text": "Nombre del Cliente"},
-                 "element": {"type": "plain_text_input", "action_id": "valor"}},
-                {"type": "input", "block_id": "cedula",
-                 "label": {"type": "plain_text", "text": "Cédula del Cliente"},
-                 "element": {"type": "plain_text_input", "action_id": "valor"}},
-                {"type": "input", "block_id": "referencia",
-                 "label": {"type": "plain_text", "text": "N° de referencia del pago"},
-                 "element": {"type": "plain_text_input", "action_id": "valor"}},
-                {"type": "input", "block_id": "banco",
-                 "label": {"type": "plain_text", "text": "Banco"},
-                 "element": {"type": "static_select", "action_id": "valor",
-                             "placeholder": {"type": "plain_text", "text": "Selecciona"},
-                             "options": [
-                                 {"text": {"type": "plain_text", "text": "BDV - Banco de Venezuela"}, "value": "BDV"},
-                                 {"text": {"type": "plain_text", "text": "BNC - Banco Nacional de Crédito"}, "value": "BNC"},
-                                 {"text": {"type": "plain_text", "text": "BOD"}, "value": "BOD"},
-                                 {"text": {"type": "plain_text", "text": "Mercantil"}, "value": "Mercantil"},
-                                 {"text": {"type": "plain_text", "text": "Provincial"}, "value": "Provincial"},
-                                 {"text": {"type": "plain_text", "text": "Bicentenario"}, "value": "Bicentenario"},
-                                 {"text": {"type": "plain_text", "text": "Banesco"}, "value": "Banesco"},
-                                 {"text": {"type": "plain_text", "text": "Otro"}, "value": "Otro"}
-                             ]}},
-                {"type": "input", "block_id": "monto_reportado",
-                 "label": {"type": "plain_text", "text": "Monto reportado (Bs)"},
-                 "element": {"type": "plain_text_input", "action_id": "valor"}},
-                {"type": "input", "block_id": "monto_banco",
-                 "label": {"type": "plain_text", "text": "Monto según el banco (Bs)"},
-                 "element": {"type": "plain_text_input", "action_id": "valor"}},
-                {"type": "input", "block_id": "fecha_movimiento",
-                 "label": {"type": "plain_text", "text": "Fecha del movimiento bancario (DD/MM/YYYY)"},
-                 "element": {"type": "plain_text_input", "action_id": "valor"}},
-                {"type": "input", "block_id": "conciliador",
-                 "label": {"type": "plain_text", "text": "Conciliador"},
-                 "element": {"type": "static_select", "action_id": "valor",
-                             "placeholder": {"type": "plain_text", "text": "Selecciona"},
-                             "options": _opciones_cobradores()}},
-                {"type": "input", "block_id": "observaciones", "optional": True,
-                 "label": {"type": "plain_text", "text": "Observaciones"},
-                 "element": {"type": "plain_text_input", "action_id": "valor", "multiline": True}}
-            ]
-        }
+# ============ COMANDO /conciliar (usando el Motor Genérico) ============
+def _abrir_hoja_conciliacion():
+    creds_json = json.loads(os.environ["GOOGLE_CREDENTIALS"])
+    creds_json["private_key"] = creds_json["private_key"].replace("\\n", "\n")
+    creds = Credentials.from_service_account_info(
+        creds_json,
+        scopes=["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
     )
+    cliente = gspread.authorize(creds)
+    spreadsheet = cliente.open_by_key(os.environ["SHEET_ID"])
+    for ws in spreadsheet.worksheets():
+        if ws.title.strip().lower() in ("conciliación", "conciliacion"):
+            return ws
+    print(f"❌ No se encontró la hoja 'Conciliación'. Hojas disponibles: {[ws.title for ws in spreadsheet.worksheets()]}")
+    return None
 
 
-@app.view("form_conciliar")
-def recibir_conciliacion(ack, body, client):
-    _v = body["view"]["state"]["values"]
-    _err = _validar_view(_v, [('cedula', 'cedula'), ('fecha_movimiento', 'fecha')])
-    if _err:
-        ack(response_action="errors", errors=_err)
-        return
-    ack()
-    valores = body["view"]["state"]["values"]
-    cliente_nombre = valores["cliente"]["valor"]["value"]
-    cedula = valores["cedula"]["valor"]["value"]
-    referencia = valores["referencia"]["valor"]["value"]
-    banco = valores["banco"]["valor"]["selected_option"]["value"]
-    monto_reportado_str = valores["monto_reportado"]["valor"]["value"]
-    monto_banco_str = valores["monto_banco"]["valor"]["value"]
-    fecha_movimiento = valores["fecha_movimiento"]["valor"]["value"]
-    conciliador = valores["conciliador"]["valor"]["selected_option"]["value"]
-    observaciones = valores["observaciones"]["valor"]["value"] or ""
-    usuario_slack = body["user"]["id"]
-    fecha = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y")
+def _calcular_conciliacion(datos):
+    """Calcula la diferencia entre lo reportado y lo que dice el banco, y decide el
+    Estado (Conciliado / Con diferencia / Revisar manualmente) — mismo cálculo y mismos
+    umbrales que usaba el comando antes de esta migración."""
+    monto_reportado_str = datos.get("monto_reportado", "")
+    monto_banco_str = datos.get("monto_banco", "")
     try:
         rep_num = parse_numero(monto_reportado_str)
         banco_num = parse_numero(monto_banco_str)
@@ -1072,94 +971,99 @@ def recibir_conciliacion(ack, body, client):
         monto_banco_fmt = f"Bs. {banco_num:,.2f}"
         diferencia_fmt = f"Bs. {diferencia_num:,.2f}"
         if abs(diferencia_num) < 0.01:
-            estado = "Conciliado"
-            emoji_estado = "✅"
+            estado, emoji_estado = "Conciliado", "✅"
         else:
-            estado = "Con diferencia"
-            emoji_estado = "⚠️"
+            estado, emoji_estado = "Con diferencia", "⚠️"
     except (ValueError, AttributeError):
         monto_reportado_fmt = f"Bs. {monto_reportado_str}"
         monto_banco_fmt = f"Bs. {monto_banco_str}"
         diferencia_fmt = "(No calculable)"
-        estado = "Revisar manualmente"
-        emoji_estado = "❓"
-    texto = (
-        f"*Nueva conciliación reportada* 🧾\n"
-        f"*Fecha:* {fecha}\n"
-        f"*Reportado por:* <@{usuario_slack}>\n"
-        f"*Cliente:* {cliente_nombre}\n"
-        f"*Cédula:* {cedula}\n"
-        f"*N° referencia pago:* {referencia}\n"
-        f"*Banco:* {banco}\n"
-        f"*Monto reportado:* {monto_reportado_fmt}\n"
-        f"*Monto según banco:* {monto_banco_fmt}\n"
-        f"*Diferencia:* {diferencia_fmt}\n"
-        f"*Estado:* {emoji_estado} {estado}\n"
-        f"*Fecha movimiento banco:* {fecha_movimiento}\n"
-        f"*Conciliador:* {conciliador}\n"
-        f"*Observaciones:* {observaciones}"
-    )
-    try:
-        client.chat_postMessage(
-            channel="#cobranzas-conciliar",
-            text="Nueva conciliación reportada",
-            metadata={"event_type": "conciliacion_reportada", "event_payload": {
-                "fecha": fecha, "cliente": cliente_nombre, "cedula": cedula, "referencia": referencia,
-                "banco": banco, "monto_reportado": monto_reportado_fmt, "monto_banco": monto_banco_fmt,
-                "diferencia": diferencia_fmt, "estado": estado, "fecha_movimiento": fecha_movimiento,
-                "conciliador": conciliador, "observaciones": observaciones}},
-            blocks=[
-                {"type": "section", "text": {"type": "mrkdwn", "text": texto}},
-                {"type": "actions", "elements": [
-                    {"type": "button", "text": {"type": "plain_text", "text": "✅ Aprobar"}, "style": "primary", "action_id": "aprobar_conciliacion"},
-                    {"type": "button", "text": {"type": "plain_text", "text": "❌ Rechazar"}, "style": "danger", "action_id": "rechazar_conciliacion"}
-                ]}
-            ]
-        )
-    except Exception as e:
-        print(f"⚠️ No se pudo enviar mensaje al canal de conciliación: {e}")
+        estado, emoji_estado = "Revisar manualmente", "❓"
+    return {
+        "monto_reportado": monto_reportado_fmt,
+        "monto_banco": monto_banco_fmt,
+        "diferencia": diferencia_fmt,
+        "estado": estado,  # se guarda en el Sheet, sin emoji (igual que antes)
+        "estado_mostrado": f"{emoji_estado} {estado}",  # solo para el mensaje en Slack
+    }
+
+
+FORM_SPECS["conciliar"] = {
+    "callback_id": "form_conciliar",
+    "titulo": "Conciliar Pago",
+    "campos": [
+        {"id": "cliente", "label": "Nombre del Cliente", "tipo": "texto"},
+        {"id": "cedula", "label": "Cédula del Cliente", "tipo": "texto", "validar": "cedula"},
+        {"id": "referencia", "label": "N° de referencia del pago", "tipo": "texto"},
+        {"id": "banco", "label": "Banco", "tipo": "select", "opciones": [
+            {"text": {"type": "plain_text", "text": "BDV - Banco de Venezuela"}, "value": "BDV"},
+            {"text": {"type": "plain_text", "text": "BNC - Banco Nacional de Crédito"}, "value": "BNC"},
+            {"text": {"type": "plain_text", "text": "BOD"}, "value": "BOD"},
+            {"text": {"type": "plain_text", "text": "Mercantil"}, "value": "Mercantil"},
+            {"text": {"type": "plain_text", "text": "Provincial"}, "value": "Provincial"},
+            {"text": {"type": "plain_text", "text": "Bicentenario"}, "value": "Bicentenario"},
+            {"text": {"type": "plain_text", "text": "Banesco"}, "value": "Banesco"},
+            {"text": {"type": "plain_text", "text": "Otro"}, "value": "Otro"},
+        ]},
+        {"id": "monto_reportado", "label": "Monto reportado (Bs)", "tipo": "texto"},
+        {"id": "monto_banco", "label": "Monto según el banco (Bs)", "tipo": "texto"},
+        {"id": "fecha_movimiento", "label": "Fecha del movimiento bancario (DD/MM/YYYY)", "tipo": "texto", "validar": "fecha"},
+        {"id": "conciliador", "label": "Conciliador", "tipo": "select", "opciones": _opciones_cobradores},
+        {"id": "observaciones", "label": "Observaciones", "tipo": "texto", "multiline": True, "opcional": True},
+    ],
+    "calcular": _calcular_conciliacion,
+    "abrir_hoja": _abrir_hoja_conciliacion,
+    "agregar_fecha": "Fecha conciliación",
+    "columnas": {
+        "cliente": "Cliente", "cedula": "Cédula", "referencia": "Referencia", "banco": "Banco",
+        "monto_reportado": "Monto reportado", "monto_banco": "Monto banco", "diferencia": "Diferencia",
+        "estado": "Estado", "fecha_movimiento": "Fecha movimiento", "conciliador": "Conciliador",
+        "observaciones": "Observaciones",
+    },
+    "columna_id_registro": "ID Registro",
+    "anti_duplicado": True,
+    "prefijo_id": "CONC",
+    "accion_id": "conciliacion",
+    "canal": "#cobranzas-conciliar",
+    "titulo_mensaje": "Nueva conciliación reportada",
+    "emoji_mensaje": "🧾",
+    "campos_mensaje": [
+        ("Cliente", "cliente"), ("Cédula", "cedula"), ("N° referencia pago", "referencia"),
+        ("Banco", "banco"), ("Monto reportado", "monto_reportado"), ("Monto según banco", "monto_banco"),
+        ("Diferencia", "diferencia"), ("Estado", "estado_mostrado"),
+        ("Fecha movimiento banco", "fecha_movimiento"), ("Conciliador", "conciliador"),
+        ("Observaciones", "observaciones"),
+    ],
+}
+
+
+@app.command("/conciliar")
+def reportar_conciliacion(ack, body, client):
+    ack()
+    _abrir_formulario_generico("conciliar", body["trigger_id"], client)
+
+
+@app.view("form_conciliar")
+def recibir_conciliacion(ack, body, client):
+    valores_view = body["view"]["state"]["values"]
+    errores = _validar_formulario_generico("conciliar", valores_view)
+    if errores:
+        ack(response_action="errors", errors=errores)
+        return
+    ack()
+    _publicar_para_aprobacion("conciliar", body, client)
 
 
 @app.action("aprobar_conciliacion")
 def aprobar_conciliacion(ack, body, client):
     ack()
-    texto_original = body["message"]["blocks"][0]["text"]["text"]
-    if _ya_procesado(texto_original):
-        return
-    fecha_revision = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y")
-    registro_id = _id_amigable("CONC", body["message"]["ts"])
-    resultado = "ERROR"
-    try:
-        meta = body["message"].get("metadata", {}).get("event_payload", {})
-        resultado = guardar_en_conciliacion(
-            meta.get("fecha", fecha_revision), meta.get("cliente", ""), meta.get("cedula", ""),
-            meta.get("referencia", ""), meta.get("banco", ""), meta.get("monto_reportado", ""),
-            meta.get("monto_banco", ""), meta.get("diferencia", ""), meta.get("estado", ""),
-            meta.get("fecha_movimiento", ""), meta.get("conciliador", ""), meta.get("observaciones", ""), registro_id)
-    except Exception as e:
-        print(f"Error: {e}")
-    if resultado == "DUPLICADO":
-        encabezado = f"⚠️ *YA REGISTRADA* — esta conciliación ya estaba guardada, no se duplicó. Revisado por <@{body['user']['id']}> el {fecha_revision}"
-    else:
-        encabezado = f"✅ *APROBADO* por <@{body['user']['id']}> el {fecha_revision}"
-    client.chat_update(
-        channel=body["channel"]["id"], ts=body["message"]["ts"], text="Conciliación procesada",
-        blocks=[{"type": "section", "text": {"type": "mrkdwn", "text": f"{encabezado}\n\n{texto_original}"}}]
-    )
+    _aprobar_generico("conciliar", body, client)
 
 
 @app.action("rechazar_conciliacion")
 def rechazar_conciliacion(ack, body, client):
     ack()
-    texto_original = body["message"]["blocks"][0]["text"]["text"]
-    if _ya_procesado(texto_original):
-        return
-    fecha_revision = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y")
-    client.chat_update(
-        channel=body["channel"]["id"], ts=body["message"]["ts"], text="Conciliación RECHAZADA",
-        blocks=[{"type": "section", "text": {"type": "mrkdwn",
-                 "text": f"❌ *RECHAZADO* por <@{body['user']['id']}> el {fecha_revision}\n\n{texto_original}"}}]
-    )
+    _rechazar_generico("conciliar", body, client)
 # ============ FIN COMANDO /conciliar ============
 
 
@@ -1280,70 +1184,43 @@ def rechazar_liquidacion_nueva(ack, body, client):
     _rechazar_generico("liquidacion_nueva", body, client)
 
 
+# Este comando ACTUALIZA una fila que ya existe (busca por cédula), no crea una fila
+# nueva — por eso usa el motor solo para el formulario y la publicación con
+# Aprobar/Rechazar (mismas piezas compartidas que el resto), pero el guardado real
+# sigue siendo la función propia actualizar_estatus_liquidacion (arriba), porque
+# "actualizar" es una operación distinta a "guardar_generico" (que siempre agrega
+# una fila nueva).
+FORM_SPECS["liquidacion_estatus"] = {
+    "callback_id": "form_liquidacion_estatus",
+    "titulo": "Cambiar Estatus",
+    "campos": [
+        {"id": "cedula", "label": "Cédula de la persona", "tipo": "texto", "validar": "cedula"},
+        {"id": "nombre", "label": "Nombre (referencia)", "tipo": "texto"},
+        {"id": "estatus", "label": "Nuevo estatus", "tipo": "select", "opciones": lambda: _opciones_lista(ESTATUS_LIQUIDACION)},
+    ],
+    "accion_id": "liquidacion_estatus",
+    "canal": CANAL_LIQUIDACIONES,
+    "titulo_mensaje": "Cambio de estatus solicitado",
+    "emoji_mensaje": "🔄",
+    "campos_mensaje": [("Nombre", "nombre"), ("Cédula", "cedula"), ("Nuevo estatus", "estatus")],
+}
+
+
 @app.command("/liquidacion-estatus")
 def reportar_liquidacion_estatus(ack, body, client):
     ack()
-    client.views_open(
-        trigger_id=body["trigger_id"],
-        view={
-            "type": "modal", "callback_id": "form_liquidacion_estatus",
-            "title": {"type": "plain_text", "text": "Cambiar Estatus"},
-            "submit": {"type": "plain_text", "text": "Enviar"},
-            "blocks": [
-                {"type": "input", "block_id": "cedula",
-                 "label": {"type": "plain_text", "text": "Cédula de la persona"},
-                 "element": {"type": "plain_text_input", "action_id": "valor"}},
-                {"type": "input", "block_id": "nombre",
-                 "label": {"type": "plain_text", "text": "Nombre (referencia)"},
-                 "element": {"type": "plain_text_input", "action_id": "valor"}},
-                {"type": "input", "block_id": "estatus",
-                 "label": {"type": "plain_text", "text": "Nuevo estatus"},
-                 "element": {"type": "static_select", "action_id": "valor",
-                             "placeholder": {"type": "plain_text", "text": "Selecciona"},
-                             "options": _opciones_lista(ESTATUS_LIQUIDACION)}}
-            ]
-        }
-    )
+    _abrir_formulario_generico("liquidacion_estatus", body["trigger_id"], client)
 
 
 @app.view("form_liquidacion_estatus")
 def recibir_liquidacion_estatus(ack, body, client):
-    _v = body["view"]["state"]["values"]
-    _err = _validar_view(_v, [('cedula', 'cedula')])
-    if _err:
-        ack(response_action="errors", errors=_err)
+    valores_view = body["view"]["state"]["values"]
+    errores = _validar_formulario_generico("liquidacion_estatus", valores_view)
+    if errores:
+        ack(response_action="errors", errors=errores)
         return
     ack()
-    valores = body["view"]["state"]["values"]
-    cedula = valores["cedula"]["valor"]["value"]
-    nombre = valores["nombre"]["valor"]["value"]
-    estatus = valores["estatus"]["valor"]["selected_option"]["value"]
-    usuario_slack = body["user"]["id"]
-    fecha = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y")
-    texto = (
-        f"*Cambio de estatus solicitado* 🔄\n"
-        f"*Fecha:* {fecha}\n"
-        f"*Reportado por:* <@{usuario_slack}>\n"
-        f"*Nombre:* {nombre}\n"
-        f"*Cédula:* {cedula}\n"
-        f"*Nuevo estatus:* {estatus}"
-    )
-    try:
-        client.chat_postMessage(
-            channel=CANAL_LIQUIDACIONES,
-            text="Cambio de estatus solicitado",
-            metadata={"event_type": "liquidacion_estatus", "event_payload": {
-                "fecha": fecha, "nombre": nombre, "cedula": cedula, "estatus": estatus}},
-            blocks=[
-                {"type": "section", "text": {"type": "mrkdwn", "text": texto}},
-                {"type": "actions", "elements": [
-                    {"type": "button", "text": {"type": "plain_text", "text": "✅ Aprobar"}, "style": "primary", "action_id": "aprobar_liquidacion_estatus"},
-                    {"type": "button", "text": {"type": "plain_text", "text": "❌ Rechazar"}, "style": "danger", "action_id": "rechazar_liquidacion_estatus"}
-                ]}
-            ]
-        )
-    except Exception as e:
-        print(f"⚠️ No se pudo enviar mensaje al canal de liquidaciones: {e}")
+    _publicar_para_aprobacion("liquidacion_estatus", body, client)
 
 
 @app.action("aprobar_liquidacion_estatus")
@@ -1368,15 +1245,7 @@ def aprobar_liquidacion_estatus(ack, body, client):
 @app.action("rechazar_liquidacion_estatus")
 def rechazar_liquidacion_estatus(ack, body, client):
     ack()
-    texto_original = body["message"]["blocks"][0]["text"]["text"]
-    if _ya_procesado(texto_original):
-        return
-    fecha_revision = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y")
-    client.chat_update(
-        channel=body["channel"]["id"], ts=body["message"]["ts"], text="Cambio de estatus RECHAZADO",
-        blocks=[{"type": "section", "text": {"type": "mrkdwn",
-                 "text": f"❌ *RECHAZADO* por <@{body['user']['id']}> el {fecha_revision}\n\n{texto_original}"}}]
-    )
+    _rechazar_generico("liquidacion_estatus", body, client)
 # ============ FIN COMANDOS DE LIQUIDACIONES ============
 
 
@@ -3027,6 +2896,61 @@ def rechazar_merca_incidencia(ack, body, client):
                  "text": f"❌ *RECHAZADO* por <@{body['user']['id']}> el {fecha_revision}\n\n{texto_original}"}}]
     )
 # ============ FIN MÓDULO DE MERCADEO ============
+
+
+# ============ COMANDO /reportar-incidencia (Incidencias Full Code) ============
+# Reporta cuotas de un plan de pago (Full Code) que quedaron vencidas o pendientes y
+# necesitan seguimiento. Se guarda directo al enviar el formulario (sin aprobación) y se
+# publica en el canal de Incidencias, para que el equipo las revise y las resuelva.
+FORM_SPECS["reportar_incidencia"] = {
+    "callback_id": "form_reportar_incidencia",
+    "titulo": "Reportar Incidencia",
+    "campos": [
+        {"id": "nombre", "label": "Nombre del Cliente", "tipo": "texto"},
+        {"id": "cedula", "label": "Cédula / RIF", "tipo": "texto", "validar": "cedula"},
+        {"id": "cuota", "label": "N° de Cuota", "tipo": "texto"},
+        {"id": "fecha_vencimiento", "label": "Fecha de vencimiento (DD/MM/AAAA)", "tipo": "texto", "validar": "fecha"},
+        {"id": "monto_pendiente", "label": "Monto pendiente (USD)", "tipo": "texto"},
+        {"id": "estatus", "label": "Estatus", "tipo": "select", "opciones": [
+            {"text": {"type": "plain_text", "text": "Vencida"}, "value": "Vencida"},
+            {"text": {"type": "plain_text", "text": "Pendiente"}, "value": "Pendiente"},
+        ]},
+        {"id": "descripcion", "label": "Descripción de la incidencia", "tipo": "texto", "multiline": True},
+        {"id": "reportado_por", "label": "Reportado por", "tipo": "texto"},
+    ],
+    "abrir_hoja": lambda: _abrir_hoja_mercadeo("Incidencias full code"),
+    "columnas": {
+        "nombre": "Nombre", "cedula": "Cedula/Rif", "cuota": "N de Quoota",
+        "fecha_vencimiento": "Fecha de vencimiento", "monto_pendiente": "Monto pendiente(USD)",
+        "estatus": "Estatus", "descripcion": "Descripcion de la Incidencia", "reportado_por": "Reportado por",
+    },
+    "canal": "C0BNT56M79U",
+    "titulo_mensaje": "Nueva incidencia reportada (Full Code)",
+    "emoji_mensaje": "🛠️",
+    "campos_mensaje": [
+        ("Cliente", "nombre"), ("Cédula/RIF", "cedula"), ("N° de Cuota", "cuota"),
+        ("Fecha de vencimiento", "fecha_vencimiento"), ("Monto pendiente (USD)", "monto_pendiente"),
+        ("Estatus", "estatus"), ("Descripción", "descripcion"),
+    ],
+}
+
+
+@app.command("/incidencia-fullcode")
+def reportar_incidencia_fullcode(ack, body, client):
+    ack()
+    _abrir_formulario_generico("reportar_incidencia", body["trigger_id"], client)
+
+
+@app.view("form_reportar_incidencia")
+def recibir_incidencia_fullcode(ack, body, client):
+    valores_view = body["view"]["state"]["values"]
+    errores = _validar_formulario_generico("reportar_incidencia", valores_view)
+    if errores:
+        ack(response_action="errors", errors=errores)
+        return
+    ack()
+    _ejecutar_formulario_generico("reportar_incidencia", body, client)
+# ============ FIN COMANDO /reportar-incidencia ============
 
 
 if __name__ == "__main__":
