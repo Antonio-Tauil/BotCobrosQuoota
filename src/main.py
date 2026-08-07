@@ -164,38 +164,21 @@ def _opciones_cobradores():
     return [{"text": {"type": "plain_text", "text": c}, "value": c} for c in COBRADORES]
 
 
-# ============ NUEVO COMANDO /contactar ============
-def guardar_en_contactados(fecha, nombre, telefono, cedula, compromiso, cobrador, comentario):
-    try:
-        creds_json = json.loads(os.environ["GOOGLE_CREDENTIALS"])
-        creds_json["private_key"] = creds_json["private_key"].replace("\\n", "\n")
-        creds = Credentials.from_service_account_info(
-            creds_json,
-            scopes=["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-        )
-        cliente = gspread.authorize(creds)
-        spreadsheet = cliente.open_by_key(os.environ["SHEET_ID"])
-        sheet = None
-        for ws in spreadsheet.worksheets():
-            if ws.title.strip().lower() == "contactados":
-                sheet = ws
-                break
-        if sheet is None:
-            print(f"❌ No se encontró la hoja 'Contactados'. Hojas disponibles: {[ws.title for ws in spreadsheet.worksheets()]}")
-            return
-        datos = {
-            "Fecha": fecha,
-            "Nombre": nombre,
-            "Telefono": telefono,
-            "Cedula": cedula,
-            "Compromiso de pago": compromiso,
-            "Cobrador": cobrador,
-            "COMENTARIO": comentario,
-        }
-        _guardar_fila_por_encabezado(sheet, datos)
-        print(f"✅ Contacto guardado en hoja '{sheet.title}'")
-    except Exception as e:
-        print(f"❌ Error guardando en Contactados: {type(e).__name__}: {e}")
+# ============ NUEVO COMANDO /contactar (migrado al Motor Genérico - Fase 3) ============
+def _abrir_hoja_contactados():
+    creds_json = json.loads(os.environ["GOOGLE_CREDENTIALS"])
+    creds_json["private_key"] = creds_json["private_key"].replace("\\n", "\n")
+    creds = Credentials.from_service_account_info(
+        creds_json,
+        scopes=["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+    )
+    cliente = gspread.authorize(creds)
+    spreadsheet = cliente.open_by_key(os.environ["SHEET_ID"])
+    for ws in spreadsheet.worksheets():
+        if ws.title.strip().lower() == "contactados":
+            return ws
+    print(f"❌ No se encontró la hoja 'Contactados'. Hojas disponibles: {[ws.title for ws in spreadsheet.worksheets()]}")
+    return None
 
 
 
@@ -271,76 +254,152 @@ def _validar_view(valores, specs):
 # ============ FIN VALIDACIÓN DE DATOS ============
 
 
-@app.command("/contactar")
-def reportar_contacto(ack, body, client):
-    ack()
+# ============ MOTOR GENÉRICO DE FORMULARIOS (Fase 3 - Sostenibilidad) ============
+# En vez de que cada comando repita ~150 líneas (abrir modal, validar, guardar, publicar),
+# cada comando se describe como una "ficha" corta en FORM_SPECS: qué campos tiene el
+# formulario, en qué Sheet se guarda, en qué canal se publica. El motor (las funciones de
+# abajo) sabe leer cualquier ficha y hacer todo el trabajo. Así, agregar o ajustar un
+# comando migrado a este patrón es cuestión de editar su ficha, no de tocar el motor.
+FORM_SPECS = {
+    "contactar": {
+        "callback_id": "form_contactar",
+        "titulo": "Reportar Contacto",
+        "campos": [
+            {"id": "nombre", "label": "Nombre del Cliente", "tipo": "texto"},
+            {"id": "telefono", "label": "Teléfono", "tipo": "texto", "validar": "telefono"},
+            {"id": "cedula", "label": "Cédula", "tipo": "texto", "validar": "cedula"},
+            {"id": "compromiso", "label": "Compromiso de pago (DD/MM/YYYY)", "tipo": "texto", "validar": "fecha"},
+            {"id": "cobrador", "label": "Cobrador", "tipo": "select", "opciones": _opciones_cobradores},
+            {"id": "comentario", "label": "Comentario", "tipo": "texto", "multiline": True},
+        ],
+        "abrir_hoja": _abrir_hoja_contactados,
+        "agregar_fecha": "Fecha",
+        "columnas": {
+            "nombre": "Nombre", "telefono": "Telefono", "cedula": "Cedula",
+            "compromiso": "Compromiso de pago", "cobrador": "Cobrador", "comentario": "COMENTARIO",
+        },
+        "canal": "#cobranzas-contactados",
+        "titulo_mensaje": "Nuevo contacto registrado",
+        "emoji_mensaje": "📞",
+        "campos_mensaje": [
+            ("Cliente", "nombre"), ("Teléfono", "telefono"), ("Cédula", "cedula"),
+            ("Compromiso de pago", "compromiso"), ("Cobrador", "cobrador"), ("Comentario", "comentario"),
+        ],
+    },
+}
+
+
+def _construir_blocks_formulario(spec):
+    blocks = []
+    for campo in spec["campos"]:
+        elemento = {"action_id": "valor"}
+        if campo["tipo"] == "select":
+            elemento["type"] = "static_select"
+            elemento["placeholder"] = {"type": "plain_text", "text": "Selecciona"}
+            opciones = campo["opciones"]
+            elemento["options"] = opciones() if callable(opciones) else opciones
+        else:
+            elemento["type"] = "plain_text_input"
+            if campo.get("multiline"):
+                elemento["multiline"] = True
+        blocks.append({
+            "type": "input", "block_id": campo["id"],
+            "optional": campo.get("opcional", False),
+            "label": {"type": "plain_text", "text": campo["label"]},
+            "element": elemento,
+        })
+    return blocks
+
+
+def _abrir_formulario_generico(nombre_spec, trigger_id, client):
+    spec = FORM_SPECS[nombre_spec]
     client.views_open(
-        trigger_id=body["trigger_id"],
+        trigger_id=trigger_id,
         view={
             "type": "modal",
-            "callback_id": "form_contactar",
-            "title": {"type": "plain_text", "text": "Reportar Contacto"},
+            "callback_id": spec["callback_id"],
+            "title": {"type": "plain_text", "text": spec["titulo"]},
             "submit": {"type": "plain_text", "text": "Enviar"},
-            "blocks": [
-                {"type": "input", "block_id": "nombre",
-                 "label": {"type": "plain_text", "text": "Nombre del Cliente"},
-                 "element": {"type": "plain_text_input", "action_id": "valor"}},
-                {"type": "input", "block_id": "telefono",
-                 "label": {"type": "plain_text", "text": "Teléfono"},
-                 "element": {"type": "plain_text_input", "action_id": "valor"}},
-                {"type": "input", "block_id": "cedula",
-                 "label": {"type": "plain_text", "text": "Cédula"},
-                 "element": {"type": "plain_text_input", "action_id": "valor"}},
-                {"type": "input", "block_id": "compromiso",
-                 "label": {"type": "plain_text", "text": "Compromiso de pago (DD/MM/YYYY)"},
-                 "element": {"type": "plain_text_input", "action_id": "valor"}},
-                {"type": "input", "block_id": "cobrador",
-                 "label": {"type": "plain_text", "text": "Cobrador"},
-                 "element": {"type": "static_select", "action_id": "valor",
-                             "placeholder": {"type": "plain_text", "text": "Selecciona"},
-                             "options": _opciones_cobradores()}},
-                {"type": "input", "block_id": "comentario",
-                 "label": {"type": "plain_text", "text": "Comentario"},
-                 "element": {"type": "plain_text_input", "action_id": "valor", "multiline": True}}
-            ]
+            "blocks": _construir_blocks_formulario(spec),
         }
     )
 
 
+def _validar_formulario_generico(nombre_spec, valores_view):
+    spec = FORM_SPECS[nombre_spec]
+    specs_validacion = [(c["id"], c["validar"]) for c in spec["campos"] if c.get("validar")]
+    return _validar_view(valores_view, specs_validacion)
+
+
+def _extraer_valores_formulario(spec, valores_view):
+    datos = {}
+    for campo in spec["campos"]:
+        bid = campo["id"]
+        try:
+            estado = valores_view[bid]["valor"]
+        except (KeyError, TypeError):
+            datos[bid] = ""
+            continue
+        if campo["tipo"] == "select":
+            datos[bid] = (estado.get("selected_option") or {}).get("value", "")
+        else:
+            datos[bid] = estado.get("value") or ""
+    return datos
+
+
+def _ejecutar_formulario_generico(nombre_spec, body, client):
+    """Guarda en el Sheet y publica en el canal, según la ficha del comando. Se llama
+    DESPUÉS de ack() — igual que hacía cada comando antes de esta migración."""
+    spec = FORM_SPECS[nombre_spec]
+    valores_view = body["view"]["state"]["values"]
+    datos_campos = _extraer_valores_formulario(spec, valores_view)
+    fecha = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y")
+
+    sheet = spec["abrir_hoja"]()
+    if sheet is None:
+        print(f"❌ [{nombre_spec}] No se pudo guardar: no se encontró la hoja de destino.")
+    else:
+        datos_sheet = {}
+        if spec.get("agregar_fecha"):
+            datos_sheet[spec["agregar_fecha"]] = fecha
+        for block_id, columna in spec["columnas"].items():
+            datos_sheet[columna] = datos_campos.get(block_id, "")
+        _guardar_fila_por_encabezado(sheet, datos_sheet)
+        print(f"✅ [{nombre_spec}] guardado en hoja '{sheet.title}'")
+
+    if spec.get("canal"):
+        usuario_slack = body["user"]["id"]
+        lineas = [
+            f"*{spec['titulo_mensaje']}* {spec.get('emoji_mensaje', '')}",
+            f"*Fecha:* {fecha}",
+            f"*Reportado por:* <@{usuario_slack}>",
+        ]
+        for etiqueta, block_id in spec["campos_mensaje"]:
+            lineas.append(f"*{etiqueta}:* {datos_campos.get(block_id, '')}")
+        texto = "\n".join(lineas)
+        client.chat_postMessage(
+            channel=spec["canal"], text=spec["titulo_mensaje"],
+            blocks=[{"type": "section", "text": {"type": "mrkdwn", "text": texto}}]
+        )
+# ============ FIN MOTOR GENÉRICO DE FORMULARIOS ============
+
+
+# ============ COMANDO /contactar (usando el Motor Genérico) ============
+@app.command("/contactar")
+def reportar_contacto(ack, body, client):
+    ack()
+    _abrir_formulario_generico("contactar", body["trigger_id"], client)
+
+
 @app.view("form_contactar")
 def recibir_contacto(ack, body, client):
-    _v = body["view"]["state"]["values"]
-    _err = _validar_view(_v, [('cedula', 'cedula'), ('telefono', 'telefono'), ('compromiso', 'fecha')])
-    if _err:
-        ack(response_action="errors", errors=_err)
+    valores_view = body["view"]["state"]["values"]
+    errores = _validar_formulario_generico("contactar", valores_view)
+    if errores:
+        ack(response_action="errors", errors=errores)
         return
     ack()
-    valores = body["view"]["state"]["values"]
-    nombre = valores["nombre"]["valor"]["value"]
-    telefono = valores["telefono"]["valor"]["value"]
-    cedula = valores["cedula"]["valor"]["value"]
-    compromiso = valores["compromiso"]["valor"]["value"]
-    cobrador = valores["cobrador"]["valor"]["selected_option"]["value"]
-    comentario = valores["comentario"]["valor"]["value"]
-    usuario_slack = body["user"]["id"]
-    fecha = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y")
-    guardar_en_contactados(fecha, nombre, telefono, cedula, compromiso, cobrador, comentario)
-    texto = (
-        f"*Nuevo contacto registrado* 📞\n"
-        f"*Fecha:* {fecha}\n"
-        f"*Reportado por:* <@{usuario_slack}>\n"
-        f"*Cliente:* {nombre}\n"
-        f"*Teléfono:* {telefono}\n"
-        f"*Cédula:* {cedula}\n"
-        f"*Compromiso de pago:* {compromiso}\n"
-        f"*Cobrador:* {cobrador}\n"
-        f"*Comentario:* {comentario}"
-    )
-    client.chat_postMessage(
-        channel="#cobranzas-contactados",
-        text="Nuevo contacto registrado",
-        blocks=[{"type": "section", "text": {"type": "mrkdwn", "text": texto}}]
-    )
+    _ejecutar_formulario_generico("contactar", body, client)
 # ============ FIN COMANDO /contactar ============
 
 
