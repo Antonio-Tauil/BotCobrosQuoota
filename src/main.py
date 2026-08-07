@@ -424,6 +424,11 @@ def _publicar_para_aprobacion(nombre_spec, body, client):
     texto = _construir_texto_mensaje(spec, datos_campos, fecha, usuario_slack)
     metadata_payload = dict(datos_campos)
     metadata_payload["_fecha"] = fecha
+    # El sufijo del action_id de los botones puede ser distinto al nombre de la ficha
+    # (algunos comandos ya tenían un action_id propio en Slack antes de esta migración,
+    # p.ej. "domiciliar" usa botones "aprobar_domiciliacion"). "accion_id" en la ficha
+    # permite fijar ese sufijo; si no está, se usa el nombre de la ficha tal cual.
+    sufijo_accion = spec.get("accion_id", nombre_spec)
     try:
         client.chat_postMessage(
             channel=spec["canal"], text=spec["titulo_mensaje"],
@@ -432,9 +437,9 @@ def _publicar_para_aprobacion(nombre_spec, body, client):
                 {"type": "section", "text": {"type": "mrkdwn", "text": texto}},
                 {"type": "actions", "elements": [
                     {"type": "button", "text": {"type": "plain_text", "text": "✅ Aprobar"}, "style": "primary",
-                     "action_id": f"aprobar_{nombre_spec}"},
+                     "action_id": f"aprobar_{sufijo_accion}"},
                     {"type": "button", "text": {"type": "plain_text", "text": "❌ Rechazar"}, "style": "danger",
-                     "action_id": f"rechazar_{nombre_spec}"},
+                     "action_id": f"rechazar_{sufijo_accion}"},
                 ]}
             ]
         )
@@ -786,6 +791,7 @@ FORM_SPECS["domiciliar"] = {
     "columna_id_registro": "ID Registro",
     "anti_duplicado": True,
     "prefijo_id": "DOMIC",
+    "accion_id": "domiciliacion",
     "canal": "#cobranzas-domiciliacion",
     "titulo_mensaje": "Nueva domiciliación reportada",
     "emoji_mensaje": "🏦",
@@ -892,6 +898,7 @@ FORM_SPECS["cobro_callcenter"] = {
     "columna_id_registro": "ID Registro",
     "anti_duplicado": True,
     "prefijo_id": "CALLCENTER",
+    "accion_id": "cobro2",
     "canal": "C0BAS4M970S",
     "titulo_mensaje": "Nuevo cobro reportado (Call Center)",
     "emoji_mensaje": "📞💰",
@@ -1431,6 +1438,7 @@ FORM_SPECS["cobro_comercial"] = {
     "columna_id_registro": "ID Registro",
     "anti_duplicado": True,
     "prefijo_id": "COMERCIAL",
+    "accion_id": "comercial",
     "canal": CANAL_COMERCIAL,
     "titulo_mensaje": "Nuevo cobro reportado (Comercial)",
     "emoji_mensaje": "🤝💰",
