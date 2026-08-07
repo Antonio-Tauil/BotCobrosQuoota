@@ -347,40 +347,129 @@ def _extraer_valores_formulario(spec, valores_view):
     return datos
 
 
+def _guardar_generico(nombre_spec, datos_campos, fecha, registro_id=""):
+    """Guarda una fila en el Sheet de la ficha 'nombre_spec', por nombre de columna.
+    Si la ficha pide anti-duplicado, revisa primero que ese registro_id no exista ya.
+    Devuelve 'OK', 'DUPLICADO' o 'ERROR' (igual que las funciones guardar_en_* de antes)."""
+    spec = FORM_SPECS[nombre_spec]
+    sheet = spec["abrir_hoja"]()
+    if sheet is None:
+        print(f"❌ [{nombre_spec}] No se pudo guardar: no se encontró la hoja de destino.")
+        return "ERROR"
+    if spec.get("anti_duplicado") and _registro_ya_guardado(sheet, registro_id):
+        print(f"⚠️ [{nombre_spec}] duplicado (ya guardado), se omite.")
+        return "DUPLICADO"
+    datos_sheet = {}
+    if spec.get("agregar_fecha"):
+        datos_sheet[spec["agregar_fecha"]] = fecha
+    for block_id, columna in spec["columnas"].items():
+        datos_sheet[columna] = datos_campos.get(block_id, "")
+    if spec.get("columna_id_registro"):
+        datos_sheet[spec["columna_id_registro"]] = registro_id
+    _guardar_fila_por_encabezado(sheet, datos_sheet)
+    print(f"✅ [{nombre_spec}] guardado en hoja '{sheet.title}'")
+    return "OK"
+
+
+def _construir_texto_mensaje(spec, datos_campos, fecha, usuario_slack):
+    lineas = [
+        f"*{spec['titulo_mensaje']}* {spec.get('emoji_mensaje', '')}",
+        f"*Fecha:* {fecha}",
+        f"*Reportado por:* <@{usuario_slack}>",
+    ]
+    for etiqueta, block_id in spec["campos_mensaje"]:
+        lineas.append(f"*{etiqueta}:* {datos_campos.get(block_id, '')}")
+    return "\n".join(lineas)
+
+
 def _ejecutar_formulario_generico(nombre_spec, body, client):
-    """Guarda en el Sheet y publica en el canal, según la ficha del comando. Se llama
+    """Para comandos SIN aprobación: guarda de una vez y publica en el canal. Se llama
     DESPUÉS de ack() — igual que hacía cada comando antes de esta migración."""
     spec = FORM_SPECS[nombre_spec]
     valores_view = body["view"]["state"]["values"]
     datos_campos = _extraer_valores_formulario(spec, valores_view)
     fecha = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y")
 
-    sheet = spec["abrir_hoja"]()
-    if sheet is None:
-        print(f"❌ [{nombre_spec}] No se pudo guardar: no se encontró la hoja de destino.")
-    else:
-        datos_sheet = {}
-        if spec.get("agregar_fecha"):
-            datos_sheet[spec["agregar_fecha"]] = fecha
-        for block_id, columna in spec["columnas"].items():
-            datos_sheet[columna] = datos_campos.get(block_id, "")
-        _guardar_fila_por_encabezado(sheet, datos_sheet)
-        print(f"✅ [{nombre_spec}] guardado en hoja '{sheet.title}'")
+    _guardar_generico(nombre_spec, datos_campos, fecha)
 
     if spec.get("canal"):
         usuario_slack = body["user"]["id"]
-        lineas = [
-            f"*{spec['titulo_mensaje']}* {spec.get('emoji_mensaje', '')}",
-            f"*Fecha:* {fecha}",
-            f"*Reportado por:* <@{usuario_slack}>",
-        ]
-        for etiqueta, block_id in spec["campos_mensaje"]:
-            lineas.append(f"*{etiqueta}:* {datos_campos.get(block_id, '')}")
-        texto = "\n".join(lineas)
+        texto = _construir_texto_mensaje(spec, datos_campos, fecha, usuario_slack)
         client.chat_postMessage(
             channel=spec["canal"], text=spec["titulo_mensaje"],
             blocks=[{"type": "section", "text": {"type": "mrkdwn", "text": texto}}]
         )
+
+
+def _publicar_para_aprobacion(nombre_spec, body, client):
+    """Para comandos CON aprobación: no guarda todavía — publica el reporte en el canal
+    con botones Aprobar/Rechazar, y guarda los datos en los 'metadata' del mensaje para
+    poder leerlos de nuevo cuando alguien apruebe. Se llama DESPUÉS de ack()."""
+    spec = FORM_SPECS[nombre_spec]
+    valores_view = body["view"]["state"]["values"]
+    datos_campos = _extraer_valores_formulario(spec, valores_view)
+    fecha = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y")
+    usuario_slack = body["user"]["id"]
+    texto = _construir_texto_mensaje(spec, datos_campos, fecha, usuario_slack)
+    metadata_payload = dict(datos_campos)
+    metadata_payload["_fecha"] = fecha
+    try:
+        client.chat_postMessage(
+            channel=spec["canal"], text=spec["titulo_mensaje"],
+            metadata={"event_type": f"{nombre_spec}_reportado", "event_payload": metadata_payload},
+            blocks=[
+                {"type": "section", "text": {"type": "mrkdwn", "text": texto}},
+                {"type": "actions", "elements": [
+                    {"type": "button", "text": {"type": "plain_text", "text": "✅ Aprobar"}, "style": "primary",
+                     "action_id": f"aprobar_{nombre_spec}"},
+                    {"type": "button", "text": {"type": "plain_text", "text": "❌ Rechazar"}, "style": "danger",
+                     "action_id": f"rechazar_{nombre_spec}"},
+                ]}
+            ]
+        )
+    except Exception as e:
+        print(f"⚠️ [{nombre_spec}] No se pudo enviar mensaje al canal: {e}")
+
+
+def _aprobar_generico(nombre_spec, body, client):
+    """Handler compartido para el botón '✅ Aprobar' de cualquier comando con aprobación.
+    Se llama DESPUÉS de ack()."""
+    spec = FORM_SPECS[nombre_spec]
+    texto_original = body["message"]["blocks"][0]["text"]["text"]
+    if _ya_procesado(texto_original):
+        return
+    fecha_revision = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y")
+    meta = dict(body["message"].get("metadata", {}).get("event_payload", {}))
+    fecha_original = meta.pop("_fecha", fecha_revision)
+    registro_id = ""
+    if spec.get("anti_duplicado"):
+        registro_id = _id_amigable(spec.get("prefijo_id", nombre_spec.upper()), body["message"]["ts"])
+    resultado = _guardar_generico(nombre_spec, meta, fecha_original, registro_id)
+    if resultado == "DUPLICADO":
+        encabezado = f"⚠️ *YA REGISTRADO* — ya estaba guardado, no se duplicó. Revisado por <@{body['user']['id']}> el {fecha_revision}"
+    elif resultado == "OK":
+        encabezado = f"✅ *APROBADO* por <@{body['user']['id']}> el {fecha_revision}"
+    else:
+        encabezado = f"⚠️ *APROBADO pero hubo error guardando (revisar logs)* por <@{body['user']['id']}> el {fecha_revision}"
+    client.chat_update(
+        channel=body["channel"]["id"], ts=body["message"]["ts"], text=f"{spec['titulo_mensaje']} procesado",
+        blocks=[{"type": "section", "text": {"type": "mrkdwn", "text": f"{encabezado}\n\n{texto_original}"}}]
+    )
+
+
+def _rechazar_generico(nombre_spec, body, client):
+    """Handler compartido para el botón '❌ Rechazar' de cualquier comando con aprobación.
+    Se llama DESPUÉS de ack()."""
+    spec = FORM_SPECS[nombre_spec]
+    texto_original = body["message"]["blocks"][0]["text"]["text"]
+    if _ya_procesado(texto_original):
+        return
+    fecha_revision = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y")
+    client.chat_update(
+        channel=body["channel"]["id"], ts=body["message"]["ts"], text=f"{spec['titulo_mensaje']} RECHAZADO",
+        blocks=[{"type": "section", "text": {"type": "mrkdwn",
+                 "text": f"❌ *RECHAZADO* por <@{body['user']['id']}> el {fecha_revision}\n\n{texto_original}"}}]
+    )
 # ============ FIN MOTOR GENÉRICO DE FORMULARIOS ============
 
 
@@ -1729,168 +1818,83 @@ def rechazar_comercial(ack, body, client):
 # ============ FIN COMANDO /cobro-comercial ============
 
 
-# ============ COMANDO /contacto-legal (Equipo Legal) ============
-def guardar_en_contactados_legal(fecha, nombre, telefono, cedula, compromiso, cobrador, comentario, registro_id=""):
-    try:
-        creds_json = json.loads(os.environ["GOOGLE_CREDENTIALS"])
-        creds_json["private_key"] = creds_json["private_key"].replace("\\n", "\n")
-        creds = Credentials.from_service_account_info(
-            creds_json,
-            scopes=["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-        )
-        cliente = gspread.authorize(creds)
-        spreadsheet = cliente.open_by_key(SHEET_ID_LEGAL)
-        sheet = None
-        for ws in spreadsheet.worksheets():
-            if ws.title.strip().lower() == "contactados":
-                sheet = ws
-                break
-        if sheet is None:
-            print(f"❌ No se encontró la hoja 'Contactados'. Hojas disponibles: {[ws.title for ws in spreadsheet.worksheets()]}")
-            return "ERROR"
-        if _registro_ya_guardado(sheet, registro_id):
-            print("⚠️ Contacto legal duplicado (ya guardado), se omite.")
-            return "DUPLICADO"
-        datos = {
-            "Fecha": fecha,
-            "Nombre": nombre,
-            "Telefono": telefono,
-            "Cedula": cedula,
-            "Compromiso de pago": compromiso,
-            "Cobrador": cobrador,
-            "COMENTARIO": comentario,
-            "ID Registro": registro_id,
-        }
-        _guardar_fila_por_encabezado(sheet, datos)
-        print(f"✅ Contacto (Legal) guardado en hoja '{sheet.title}'")
-        return "OK"
-    except Exception as e:
-        print(f"❌ Error guardando en Contactados (Legal): {type(e).__name__}: {e}")
-        return "ERROR"
+# ============ COMANDO /contacto-legal (Equipo Legal) — usando el Motor Genérico ============
+def _abrir_hoja_contactados_legal():
+    creds_json = json.loads(os.environ["GOOGLE_CREDENTIALS"])
+    creds_json["private_key"] = creds_json["private_key"].replace("\\n", "\n")
+    creds = Credentials.from_service_account_info(
+        creds_json,
+        scopes=["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+    )
+    cliente = gspread.authorize(creds)
+    spreadsheet = cliente.open_by_key(SHEET_ID_LEGAL)
+    for ws in spreadsheet.worksheets():
+        if ws.title.strip().lower() == "contactados":
+            return ws
+    print(f"❌ No se encontró la hoja 'Contactados'. Hojas disponibles: {[ws.title for ws in spreadsheet.worksheets()]}")
+    return None
+
+
+FORM_SPECS["contacto_legal"] = {
+    "callback_id": "form_contacto_legal",
+    "titulo": "Contacto Legal",
+    "campos": [
+        {"id": "nombre", "label": "Nombre del Cliente", "tipo": "texto"},
+        {"id": "telefono", "label": "Teléfono", "tipo": "texto", "validar": "telefono"},
+        {"id": "cedula", "label": "Cédula", "tipo": "texto", "validar": "cedula"},
+        {"id": "compromiso", "label": "Compromiso de pago (DD/MM/YYYY)", "tipo": "texto", "validar": "fecha"},
+        {"id": "cobrador", "label": "Cobrador", "tipo": "select", "opciones": [
+            {"text": {"type": "plain_text", "text": "Maria"}, "value": "Maria"},
+            {"text": {"type": "plain_text", "text": "Gabriela"}, "value": "Gabriela"},
+        ]},
+        {"id": "comentario", "label": "Comentario", "tipo": "texto", "multiline": True},
+    ],
+    "abrir_hoja": _abrir_hoja_contactados_legal,
+    "agregar_fecha": "Fecha",
+    "columnas": {
+        "nombre": "Nombre", "telefono": "Telefono", "cedula": "Cedula",
+        "compromiso": "Compromiso de pago", "cobrador": "Cobrador", "comentario": "COMENTARIO",
+    },
+    "columna_id_registro": "ID Registro",
+    "anti_duplicado": True,
+    "prefijo_id": "LEGAL",
+    "canal": CANAL_LEGAL,
+    "titulo_mensaje": "Nuevo contacto Legal",
+    "emoji_mensaje": "⚖️",
+    "campos_mensaje": [
+        ("Cliente", "nombre"), ("Teléfono", "telefono"), ("Cédula", "cedula"),
+        ("Compromiso de pago", "compromiso"), ("Cobrador", "cobrador"), ("Comentario", "comentario"),
+    ],
+}
 
 
 @app.command("/contacto-legal")
 def reportar_contacto_legal(ack, body, client):
     ack()
-    client.views_open(
-        trigger_id=body["trigger_id"],
-        view={
-            "type": "modal", "callback_id": "form_contacto_legal",
-            "title": {"type": "plain_text", "text": "Contacto Legal"},
-            "submit": {"type": "plain_text", "text": "Enviar"},
-            "blocks": [
-                {"type": "input", "block_id": "nombre",
-                 "label": {"type": "plain_text", "text": "Nombre del Cliente"},
-                 "element": {"type": "plain_text_input", "action_id": "valor"}},
-                {"type": "input", "block_id": "telefono",
-                 "label": {"type": "plain_text", "text": "Teléfono"},
-                 "element": {"type": "plain_text_input", "action_id": "valor"}},
-                {"type": "input", "block_id": "cedula",
-                 "label": {"type": "plain_text", "text": "Cédula"},
-                 "element": {"type": "plain_text_input", "action_id": "valor"}},
-                {"type": "input", "block_id": "compromiso",
-                 "label": {"type": "plain_text", "text": "Compromiso de pago (DD/MM/YYYY)"},
-                 "element": {"type": "plain_text_input", "action_id": "valor"}},
-                {"type": "input", "block_id": "cobrador",
-                 "label": {"type": "plain_text", "text": "Cobrador"},
-                 "element": {"type": "static_select", "action_id": "valor",
-                             "placeholder": {"type": "plain_text", "text": "Selecciona"},
-                             "options": [
-                                 {"text": {"type": "plain_text", "text": "Maria"}, "value": "Maria"},
-                                 {"text": {"type": "plain_text", "text": "Gabriela"}, "value": "Gabriela"}
-                             ]}},
-                {"type": "input", "block_id": "comentario",
-                 "label": {"type": "plain_text", "text": "Comentario"},
-                 "element": {"type": "plain_text_input", "action_id": "valor", "multiline": True}}
-            ]
-        }
-    )
+    _abrir_formulario_generico("contacto_legal", body["trigger_id"], client)
 
 
 @app.view("form_contacto_legal")
 def recibir_contacto_legal(ack, body, client):
-    _v = body["view"]["state"]["values"]
-    _err = _validar_view(_v, [('cedula', 'cedula'), ('telefono', 'telefono'), ('compromiso', 'fecha')])
-    if _err:
-        ack(response_action="errors", errors=_err)
+    valores_view = body["view"]["state"]["values"]
+    errores = _validar_formulario_generico("contacto_legal", valores_view)
+    if errores:
+        ack(response_action="errors", errors=errores)
         return
     ack()
-    valores = body["view"]["state"]["values"]
-    nombre = valores["nombre"]["valor"]["value"]
-    telefono = valores["telefono"]["valor"]["value"]
-    cedula = valores["cedula"]["valor"]["value"]
-    compromiso = valores["compromiso"]["valor"]["value"]
-    cobrador = valores["cobrador"]["valor"]["selected_option"]["value"]
-    comentario = valores["comentario"]["valor"]["value"]
-    usuario_slack = body["user"]["id"]
-    fecha = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y")
-    texto = (
-        f"*Nuevo contacto Legal* ⚖️\n"
-        f"*Fecha:* {fecha}\n"
-        f"*Reportado por:* <@{usuario_slack}>\n"
-        f"*Cliente:* {nombre}\n"
-        f"*Teléfono:* {telefono}\n"
-        f"*Cédula:* {cedula}\n"
-        f"*Compromiso de pago:* {compromiso}\n"
-        f"*Cobrador:* {cobrador}\n"
-        f"*Comentario:* {comentario}"
-    )
-    try:
-        client.chat_postMessage(
-            channel=CANAL_LEGAL,
-            text="Nuevo contacto Legal",
-            metadata={"event_type": "contacto_legal", "event_payload": {
-                "fecha": fecha, "nombre": nombre, "telefono": telefono, "cedula": cedula,
-                "compromiso": compromiso, "cobrador": cobrador, "comentario": comentario}},
-            blocks=[
-                {"type": "section", "text": {"type": "mrkdwn", "text": texto}},
-                {"type": "actions", "elements": [
-                    {"type": "button", "text": {"type": "plain_text", "text": "✅ Aprobar"}, "style": "primary", "action_id": "aprobar_contacto_legal"},
-                    {"type": "button", "text": {"type": "plain_text", "text": "❌ Rechazar"}, "style": "danger", "action_id": "rechazar_contacto_legal"}
-                ]}
-            ]
-        )
-    except Exception as e:
-        print(f"⚠️ No se pudo enviar mensaje al canal legal: {e}")
+    _publicar_para_aprobacion("contacto_legal", body, client)
 
 
 @app.action("aprobar_contacto_legal")
 def aprobar_contacto_legal(ack, body, client):
     ack()
-    texto_original = body["message"]["blocks"][0]["text"]["text"]
-    if _ya_procesado(texto_original):
-        return
-    fecha_revision = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y")
-    registro_id = _id_amigable("LEGAL", body["message"]["ts"])
-    meta = body["message"].get("metadata", {}).get("event_payload", {})
-    resultado = guardar_en_contactados_legal(
-        meta.get("fecha", fecha_revision), meta.get("nombre", ""), meta.get("telefono", ""),
-        meta.get("cedula", ""), meta.get("compromiso", ""), meta.get("cobrador", ""),
-        meta.get("comentario", ""), registro_id)
-    if resultado == "DUPLICADO":
-        encabezado = f"⚠️ *YA REGISTRADO* — ya estaba guardado, no se duplicó. Revisado por <@{body['user']['id']}> el {fecha_revision}"
-    elif resultado == "OK":
-        encabezado = f"✅ *APROBADO* por <@{body['user']['id']}> el {fecha_revision}"
-    else:
-        encabezado = f"⚠️ *APROBADO pero hubo error guardando (revisar logs)* por <@{body['user']['id']}> el {fecha_revision}"
-    client.chat_update(
-        channel=body["channel"]["id"], ts=body["message"]["ts"], text="Contacto Legal procesado",
-        blocks=[{"type": "section", "text": {"type": "mrkdwn", "text": f"{encabezado}\n\n{texto_original}"}}]
-    )
+    _aprobar_generico("contacto_legal", body, client)
 
 
 @app.action("rechazar_contacto_legal")
 def rechazar_contacto_legal(ack, body, client):
     ack()
-    texto_original = body["message"]["blocks"][0]["text"]["text"]
-    if _ya_procesado(texto_original):
-        return
-    fecha_revision = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y")
-    client.chat_update(
-        channel=body["channel"]["id"], ts=body["message"]["ts"], text="Contacto Legal RECHAZADO",
-        blocks=[{"type": "section", "text": {"type": "mrkdwn",
-                 "text": f"❌ *RECHAZADO* por <@{body['user']['id']}> el {fecha_revision}\n\n{texto_original}"}}]
-    )
+    _rechazar_generico("contacto_legal", body, client)
 # ============ FIN COMANDO /contacto-legal ============
 
 
@@ -1949,110 +1953,69 @@ def listar_ids(ack, body, client):
 # ============ FIN COMANDO /listar-ids ============
 
 
-# ============ COMANDO /cliente-escalado (Clientes Escalados) ============
+# ============ COMANDO /clientes-escalados (usando el Motor Genérico) ============
 # Columnas: Fecha, Nombre del cliente, Teléfono, Cédula, Empresa, Incidencia, Reportada por
-def guardar_cliente_escalado(fecha, nombre, telefono, cedula, empresa, incidencia, reportada_por):
-    try:
-        creds_json = json.loads(os.environ["GOOGLE_CREDENTIALS"])
-        creds_json["private_key"] = creds_json["private_key"].replace("\\n", "\n")
-        creds = Credentials.from_service_account_info(
-            creds_json,
-            scopes=["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-        )
-        cliente = gspread.authorize(creds)
-        spreadsheet = cliente.open_by_key(SHEET_ID_ESCALADOS)
-        sheet = None
-        for ws in spreadsheet.worksheets():
-            if ws.title.strip().lower() == "clientes escalados":
-                sheet = ws
-                break
-        if sheet is None:
-            print(f"❌ No se encontró la hoja 'Clientes escalados'. Hojas disponibles: {[ws.title for ws in spreadsheet.worksheets()]}")
-            return
-        _guardar_fila_por_encabezado(sheet, {
-            "Fecha": fecha,
-            "Nombre": nombre,
-            "Telefono": telefono,
-            "Cedula": cedula,
-            "Empresa": empresa,
-            "Incidencia": incidencia,
-            "Reportada por": reportada_por,
-        })
-        print(f"✅ Cliente escalado guardado en hoja '{sheet.title}'")
-    except Exception as e:
-        print(f"❌ Error guardando en Clientes escalados: {type(e).__name__}: {e}")
+def _abrir_hoja_escalados():
+    creds_json = json.loads(os.environ["GOOGLE_CREDENTIALS"])
+    creds_json["private_key"] = creds_json["private_key"].replace("\\n", "\n")
+    creds = Credentials.from_service_account_info(
+        creds_json,
+        scopes=["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+    )
+    cliente = gspread.authorize(creds)
+    spreadsheet = cliente.open_by_key(SHEET_ID_ESCALADOS)
+    for ws in spreadsheet.worksheets():
+        if ws.title.strip().lower() == "clientes escalados":
+            return ws
+    print(f"❌ No se encontró la hoja 'Clientes escalados'. Hojas disponibles: {[ws.title for ws in spreadsheet.worksheets()]}")
+    return None
+
+
+FORM_SPECS["clientes_escalados"] = {
+    "callback_id": "form_cliente_escalado",
+    "titulo": "Cliente Escalado",
+    "campos": [
+        {"id": "nombre", "label": "Nombre del cliente", "tipo": "texto"},
+        {"id": "telefono", "label": "Teléfono del cliente", "tipo": "texto", "validar": "telefono"},
+        {"id": "cedula", "label": "Cédula del cliente", "tipo": "texto", "validar": "cedula"},
+        {"id": "empresa", "label": "Empresa", "tipo": "texto"},
+        {"id": "incidencia", "label": "Incidencia (describe el problema)", "tipo": "texto", "multiline": True},
+        {"id": "reportada_por", "label": "Reportada por", "tipo": "select", "opciones": _opciones_cobradores},
+    ],
+    "abrir_hoja": _abrir_hoja_escalados,
+    "agregar_fecha": "Fecha",
+    "columnas": {
+        "nombre": "Nombre", "telefono": "Telefono", "cedula": "Cedula",
+        "empresa": "Empresa", "incidencia": "Incidencia", "reportada_por": "Reportada por",
+    },
+    "canal": CANAL_ESCALADOS,
+    "titulo_mensaje": "Nuevo cliente escalado",
+    "emoji_mensaje": "🚩",
+    "campos_mensaje": [
+        ("Cliente", "nombre"), ("Teléfono", "telefono"), ("Cédula", "cedula"),
+        ("Empresa", "empresa"), ("Incidencia", "incidencia"),
+    ],
+}
 
 
 @app.command("/clientes-escalados")
 def reportar_cliente_escalado(ack, body, client):
     ack()
-    client.views_open(
-        trigger_id=body["trigger_id"],
-        view={
-            "type": "modal",
-            "callback_id": "form_cliente_escalado",
-            "title": {"type": "plain_text", "text": "Cliente Escalado"},
-            "submit": {"type": "plain_text", "text": "Enviar"},
-            "blocks": [
-                {"type": "input", "block_id": "nombre",
-                 "label": {"type": "plain_text", "text": "Nombre del cliente"},
-                 "element": {"type": "plain_text_input", "action_id": "valor"}},
-                {"type": "input", "block_id": "telefono",
-                 "label": {"type": "plain_text", "text": "Teléfono del cliente"},
-                 "element": {"type": "plain_text_input", "action_id": "valor"}},
-                {"type": "input", "block_id": "cedula",
-                 "label": {"type": "plain_text", "text": "Cédula del cliente"},
-                 "element": {"type": "plain_text_input", "action_id": "valor"}},
-                {"type": "input", "block_id": "empresa",
-                 "label": {"type": "plain_text", "text": "Empresa"},
-                 "element": {"type": "plain_text_input", "action_id": "valor"}},
-                {"type": "input", "block_id": "incidencia",
-                 "label": {"type": "plain_text", "text": "Incidencia (describe el problema)"},
-                 "element": {"type": "plain_text_input", "action_id": "valor", "multiline": True}},
-                {"type": "input", "block_id": "reportada_por",
-                 "label": {"type": "plain_text", "text": "Reportada por"},
-                 "element": {"type": "static_select", "action_id": "valor",
-                             "placeholder": {"type": "plain_text", "text": "Selecciona"},
-                             "options": _opciones_cobradores()}}
-            ]
-        }
-    )
+    _abrir_formulario_generico("clientes_escalados", body["trigger_id"], client)
 
 
 @app.view("form_cliente_escalado")
 def recibir_cliente_escalado(ack, body, client):
-    _v = body["view"]["state"]["values"]
-    _err = _validar_view(_v, [('cedula', 'cedula'), ('telefono', 'telefono')])
-    if _err:
-        ack(response_action="errors", errors=_err)
+    valores_view = body["view"]["state"]["values"]
+    errores = _validar_formulario_generico("clientes_escalados", valores_view)
+    if errores:
+        ack(response_action="errors", errors=errores)
         return
     ack()
-    valores = body["view"]["state"]["values"]
-    nombre = valores["nombre"]["valor"]["value"]
-    telefono = valores["telefono"]["valor"]["value"]
-    cedula = valores["cedula"]["valor"]["value"]
-    empresa = valores["empresa"]["valor"]["value"]
-    incidencia = valores["incidencia"]["valor"]["value"]
-    reportada_por = valores["reportada_por"]["valor"]["selected_option"]["value"]
-    usuario_slack = body["user"]["id"]
-    fecha = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y")
-    guardar_cliente_escalado(fecha, nombre, telefono, cedula, empresa, incidencia, reportada_por)
-    texto = (
-        f"*Nuevo cliente escalado* 🚩\n"
-        f"*Fecha:* {fecha}\n"
-        f"*Reportado por:* <@{usuario_slack}> ({reportada_por})\n"
-        f"*Cliente:* {nombre}\n"
-        f"*Teléfono:* {telefono}\n"
-        f"*Cédula:* {cedula}\n"
-        f"*Empresa:* {empresa}\n"
-        f"*Incidencia:* {incidencia}"
-    )
-    try:
-        client.chat_postMessage(channel=CANAL_ESCALADOS, text="Nuevo cliente escalado",
-                                blocks=[{"type": "section", "text": {"type": "mrkdwn", "text": texto}}])
-    except Exception as e:
-        print(f"⚠️ No se pudo enviar mensaje al canal de escalados: {e}")
-# ============ FIN COMANDO /cliente-escalado ============
+    _ejecutar_formulario_generico("clientes_escalados", body, client)
+# ============ FIN COMANDO /clientes-escalados ============
+
+
 
 
 # ============ COMANDO /buscar-cliente (consulta por cédula) ============
