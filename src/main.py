@@ -543,71 +543,57 @@ def guardar_en_sheet(fecha, cobrador, descripcion, numero, cedula, monto_bs, for
         return "ERROR"
 
 
+# Ficha del formulario de /cobro (Fase 3 — Motor Genérico). Solo se usa para CONSTRUIR el
+# modal (con _construir_blocks_formulario, igual que los demás comandos migrados). El guardado,
+# la aprobación, el cálculo de la tasa por fecha y la validación cruzada de "fecha + tasa"
+# se quedan TAL CUAL estaban (a propósito): son la parte más delicada de este comando, y
+# el motor genérico de hoy todavía no sabe expresar "buscar la tasa en otra pestaña según la
+# fecha" ni "un error de un campo se muestra en otro campo". Por eso esta migración es HÍBRIDA
+# (mismo patrón que ya usamos con /liquidacion-estatus): se reduce la parte repetitiva y segura
+# (armar el modal), sin tocar la lógica de negocio de la que depende el flujo de caja diario.
+FORM_SPECS["cobro"] = {
+    "callback_id": "form_cobro",
+    "titulo": "Reportar Cobro",
+    "campos": [
+        {"id": "fecha_pago", "label": "Fecha del Pago (DD/MM/AAAA) — déjalo vacío si es de hoy",
+         "tipo": "texto", "opcional": True},
+        {"id": "nombre_cobrador", "label": "Nombre del Cobrador", "tipo": "select",
+         "opciones": _opciones_cobradores},
+        {"id": "descripcion", "label": "Nombre del Cliente", "tipo": "texto"},
+        {"id": "cedula", "label": "Cédula del Cliente", "tipo": "texto", "validar": "cedula"},
+        {"id": "numero", "label": "Teléfono o Referencia", "tipo": "texto"},
+        {"id": "monto_bs", "label": "Monto en Bs", "tipo": "texto"},
+        {"id": "forma_pago", "label": "Forma de Pago", "tipo": "select", "opciones": [
+            {"text": {"type": "plain_text", "text": "Pago Móvil"}, "value": "Pago Movil"},
+            {"text": {"type": "plain_text", "text": "Transferencia"}, "value": "Transferencia"},
+            {"text": {"type": "plain_text", "text": "Efectivo"}, "value": "Efectivo"},
+            {"text": {"type": "plain_text", "text": "Zelle"}, "value": "Zelle"},
+            {"text": {"type": "plain_text", "text": "Otro"}, "value": "Otro"},
+        ]},
+        {"id": "banco", "label": "Banco", "tipo": "select", "opciones": [
+            {"text": {"type": "plain_text", "text": "BDV - Banco de Venezuela"}, "value": "BDV"},
+            {"text": {"type": "plain_text", "text": "BNC - Banco Nacional de Crédito"}, "value": "BNC"},
+            {"text": {"type": "plain_text", "text": "BOD"}, "value": "BOD"},
+            {"text": {"type": "plain_text", "text": "Mercantil"}, "value": "Mercantil"},
+            {"text": {"type": "plain_text", "text": "Provincial"}, "value": "Provincial"},
+            {"text": {"type": "plain_text", "text": "Bicentenario"}, "value": "Bicentenario"},
+            {"text": {"type": "plain_text", "text": "Banesco"}, "value": "Banesco"},
+            {"text": {"type": "plain_text", "text": "Otro"}, "value": "Otro"},
+        ]},
+    ],
+}
+
+
 @app.command("/cobro")
 def reportar_cobro(ack, body, client):
     ack()
-    client.views_open(
-        trigger_id=body["trigger_id"],
-        view={
-            "type": "modal",
-            "callback_id": "form_cobro",
-            "title": {"type": "plain_text", "text": "Reportar Cobro"},
-            "submit": {"type": "plain_text", "text": "Enviar"},
-            "blocks": [
-                {"type": "input", "block_id": "fecha_pago", "optional": True,
-                 "label": {"type": "plain_text", "text": "Fecha del Pago (DD/MM/AAAA) — déjalo vacío si es de hoy"},
-                 "element": {"type": "plain_text_input", "action_id": "valor"}},
-                {"type": "input", "block_id": "nombre_cobrador",
-                 "label": {"type": "plain_text", "text": "Nombre del Cobrador"},
-                 "element": {"type": "static_select", "action_id": "valor",
-                             "placeholder": {"type": "plain_text", "text": "Selecciona"},
-                             "options": _opciones_cobradores()}},
-                {"type": "input", "block_id": "descripcion",
-                 "label": {"type": "plain_text", "text": "Nombre del Cliente"},
-                 "element": {"type": "plain_text_input", "action_id": "valor"}},
-                {"type": "input", "block_id": "cedula",
-                 "label": {"type": "plain_text", "text": "Cédula del Cliente"},
-                 "element": {"type": "plain_text_input", "action_id": "valor"}},
-                {"type": "input", "block_id": "numero",
-                 "label": {"type": "plain_text", "text": "Teléfono o Referencia"},
-                 "element": {"type": "plain_text_input", "action_id": "valor"}},
-                {"type": "input", "block_id": "monto_bs",
-                 "label": {"type": "plain_text", "text": "Monto en Bs"},
-                 "element": {"type": "plain_text_input", "action_id": "valor"}},
-                {"type": "input", "block_id": "forma_pago",
-                 "label": {"type": "plain_text", "text": "Forma de Pago"},
-                 "element": {"type": "static_select", "action_id": "valor",
-                             "placeholder": {"type": "plain_text", "text": "Selecciona"},
-                             "options": [
-                                 {"text": {"type": "plain_text", "text": "Pago Móvil"}, "value": "Pago Movil"},
-                                 {"text": {"type": "plain_text", "text": "Transferencia"}, "value": "Transferencia"},
-                                 {"text": {"type": "plain_text", "text": "Efectivo"}, "value": "Efectivo"},
-                                 {"text": {"type": "plain_text", "text": "Zelle"}, "value": "Zelle"},
-                                 {"text": {"type": "plain_text", "text": "Otro"}, "value": "Otro"}
-                             ]}},
-                {"type": "input", "block_id": "banco",
-                 "label": {"type": "plain_text", "text": "Banco"},
-                 "element": {"type": "static_select", "action_id": "valor",
-                             "placeholder": {"type": "plain_text", "text": "Selecciona"},
-                             "options": [
-                                 {"text": {"type": "plain_text", "text": "BDV - Banco de Venezuela"}, "value": "BDV"},
-                                 {"text": {"type": "plain_text", "text": "BNC - Banco Nacional de Crédito"}, "value": "BNC"},
-                                 {"text": {"type": "plain_text", "text": "BOD"}, "value": "BOD"},
-                                 {"text": {"type": "plain_text", "text": "Mercantil"}, "value": "Mercantil"},
-                                 {"text": {"type": "plain_text", "text": "Provincial"}, "value": "Provincial"},
-                                 {"text": {"type": "plain_text", "text": "Bicentenario"}, "value": "Bicentenario"},
-                                 {"text": {"type": "plain_text", "text": "Banesco"}, "value": "Banesco"},
-                                 {"text": {"type": "plain_text", "text": "Otro"}, "value": "Otro"}
-                             ]}}
-            ]
-        }
-    )
+    _abrir_formulario_generico("cobro", body["trigger_id"], client)
 
 
 @app.view("form_cobro")
 def recibir_cobro(ack, body, client):
     _v = body["view"]["state"]["values"]
-    _err = _validar_view(_v, [('cedula', 'cedula')])
+    _err = _validar_formulario_generico("cobro", _v)
 
     hoy_txt = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y")
     fecha_pago_input = (_v.get("fecha_pago", {}).get("valor", {}).get("value") or "").strip()
