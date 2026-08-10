@@ -2584,6 +2584,8 @@ _BANCOS_MERCADEO = [
     {"text": {"type": "plain_text", "text": "Provincial"}, "value": "Provincial"},
     {"text": {"type": "plain_text", "text": "Bicentenario"}, "value": "Bicentenario"},
     {"text": {"type": "plain_text", "text": "Banesco"}, "value": "Banesco"},
+    {"text": {"type": "plain_text", "text": "Banco Digital de los Trabajadores"}, "value": "Banco Digital de los Trabajadores"},
+    {"text": {"type": "plain_text", "text": "Banco de Destino"}, "value": "Banco de Destino"},
     {"text": {"type": "plain_text", "text": "Otro"}, "value": "Otro"}
 ]
 
@@ -2634,9 +2636,6 @@ def _vista_form_conciliacion_mercadeo():
                          "options": _BANCOS_MERCADEO}},
             {"type": "input", "block_id": "fecha_pago",
              "label": {"type": "plain_text", "text": "Fecha de Pago (DD/MM/AAAA)"},
-             "element": {"type": "plain_text_input", "action_id": "valor"}},
-            {"type": "input", "block_id": "monto_usd",
-             "label": {"type": "plain_text", "text": "Monto en USD"},
              "element": {"type": "plain_text_input", "action_id": "valor"}},
             {"type": "input", "block_id": "tasa_bcv",
              "label": {"type": "plain_text", "text": "Tasa BCV Aplicada"},
@@ -2725,24 +2724,29 @@ def recibir_conciliacion_mercadeo(ack, body, client):
     forma_pago = valores["forma_pago"]["valor"]["selected_option"]["value"]
     banco = valores["banco"]["valor"]["selected_option"]["value"]
     fecha_pago = valores["fecha_pago"]["valor"]["value"]
-    monto_usd_str = valores["monto_usd"]["valor"]["value"]
     tasa_bcv_str = valores["tasa_bcv"]["valor"]["value"]
     referencia = valores["referencia"]["valor"]["value"]
     usuario_slack = body["user"]["id"]
     fecha_reporte = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y")
 
+    # El Monto en USD ya NO se escribe a mano: se calcula solo a partir de Monto en Bs
+    # y Tasa BCV, igual que en /cobro-callcenter y /cobro-comercial.
     try:
-        monto_bs_fmt = f"Bs. {parse_numero(monto_bs_str):,.2f}"
+        monto_bs_num = parse_numero(monto_bs_str)
+        monto_bs_fmt = f"Bs. {monto_bs_num:,.2f}"
     except (ValueError, AttributeError):
+        monto_bs_num = None
         monto_bs_fmt = f"Bs. {monto_bs_str}"
     try:
-        monto_usd_fmt = f"$ {parse_numero(monto_usd_str):,.2f}"
+        tasa_bcv_num = parse_numero(tasa_bcv_str)
+        tasa_bcv_fmt = f"Bs. {tasa_bcv_num:,.4f}"
     except (ValueError, AttributeError):
-        monto_usd_fmt = f"$ {monto_usd_str}"
-    try:
-        tasa_bcv_fmt = f"Bs. {parse_numero(tasa_bcv_str):,.4f}"
-    except (ValueError, AttributeError):
+        tasa_bcv_num = None
         tasa_bcv_fmt = f"Bs. {tasa_bcv_str}"
+    try:
+        monto_usd_fmt = f"$ {monto_bs_num/tasa_bcv_num:,.2f}"
+    except (TypeError, ZeroDivisionError):
+        monto_usd_fmt = "(No calculable)"
 
     texto = (
         f"*Nueva conciliación de pago (Mercadeo)* 🧾\n"
