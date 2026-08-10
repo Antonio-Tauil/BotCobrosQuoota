@@ -2248,10 +2248,16 @@ def _abrir_indicadores():
     try:
         cliente = get_cliente_busqueda()
         spreadsheet = cliente.open_by_key(os.environ["SHEET_ID"])
-        for ws in spreadsheet.worksheets():
-            if ws.title.strip().lower() == PESTANA_INDICADORES.lower():
+        pestanas = spreadsheet.worksheets()
+        objetivo = _normalizar_encabezado(PESTANA_INDICADORES)
+        for ws in pestanas:
+            if _normalizar_encabezado(ws.title) == objetivo:
                 return ws
-        print(f"⚠️ Tasa: no se encontró la hoja '{PESTANA_INDICADORES}'")
+        # No la encontró ni siquiera ignorando mayúsculas/tildes/espacios de más — se imprime
+        # repr() de cada nombre real para poder detectar caracteres invisibles (ej. un espacio
+        # de no separación) que no se ven en Google Sheets pero sí rompen la comparación.
+        print(f"⚠️ Tasa: no se encontró la hoja '{PESTANA_INDICADORES}'. "
+              f"Pestañas encontradas en el Sheet: {[repr(ws.title) for ws in pestanas]}")
         return None
     except Exception as e:
         print(f"⚠️ Tasa: error abriendo 'Indicadores': {type(e).__name__}: {e}")
