@@ -2898,39 +2898,48 @@ def rechazar_merca_incidencia(ack, body, client):
 # ============ FIN MÓDULO DE MERCADEO ============
 
 
-# ============ COMANDO /reportar-incidencia (Incidencias Full Code) ============
-# Reporta cuotas de un plan de pago (Full Code) que quedaron vencidas o pendientes y
-# necesitan seguimiento. Se guarda directo al enviar el formulario (sin aprobación) y se
+# ============ COMANDO /incidencia-fullcode (Tickets Internos por Departamento) ============
+# Reporta incidencias operativas a nivel de departamento/área (sin datos individuales de
+# clientes ni empleados). Se guarda directo al enviar el formulario (sin aprobación) y se
 # publica en el canal de Incidencias, para que el equipo las revise y las resuelva.
 FORM_SPECS["reportar_incidencia"] = {
     "callback_id": "form_reportar_incidencia",
     "titulo": "Reportar Incidencia",
     "campos": [
-        {"id": "nombre", "label": "Nombre del Cliente", "tipo": "texto"},
-        {"id": "cedula", "label": "Cédula / RIF", "tipo": "texto", "validar": "cedula"},
-        {"id": "cuota", "label": "N° de Cuota", "tipo": "texto"},
-        {"id": "fecha_vencimiento", "label": "Fecha de vencimiento (DD/MM/AAAA)", "tipo": "texto", "validar": "fecha"},
-        {"id": "monto_pendiente", "label": "Monto pendiente (USD)", "tipo": "texto"},
-        {"id": "estatus", "label": "Estatus", "tipo": "select", "opciones": [
-            {"text": {"type": "plain_text", "text": "Vencida"}, "value": "Vencida"},
-            {"text": {"type": "plain_text", "text": "Pendiente"}, "value": "Pendiente"},
+        {"id": "departamento", "label": "Departamento que Reporta", "tipo": "select", "opciones": [
+            {"text": {"type": "plain_text", "text": "Comercial"}, "value": "Comercial"},
+            {"text": {"type": "plain_text", "text": "Tesorería"}, "value": "Tesorería"},
+            {"text": {"type": "plain_text", "text": "Legal"}, "value": "Legal"},
+            {"text": {"type": "plain_text", "text": "Administración"}, "value": "Administración"},
+            {"text": {"type": "plain_text", "text": "Operaciones"}, "value": "Operaciones"},
         ]},
-        {"id": "descripcion", "label": "Descripción de la incidencia", "tipo": "texto", "multiline": True},
-        {"id": "reportado_por", "label": "Reportado por", "tipo": "texto"},
+        {"id": "empresa", "label": "Empresa/Sede", "tipo": "texto"},
+        {"id": "tipo_incidencia", "label": "Tipo de Incidencia", "tipo": "select", "opciones": [
+            {"text": {"type": "plain_text", "text": "Acceso"}, "value": "Acceso"},
+            {"text": {"type": "plain_text", "text": "Tecnología"}, "value": "Tecnología"},
+            {"text": {"type": "plain_text", "text": "Solicitud pendiente"}, "value": "Solicitud pendiente"},
+            {"text": {"type": "plain_text", "text": "Fallo de App"}, "value": "Fallo de App"},
+            {"text": {"type": "plain_text", "text": "Reporte de Pago"}, "value": "Reporte de Pago"},
+            {"text": {"type": "plain_text", "text": "Anulación de Solicitud"}, "value": "Anulación de Solicitud"},
+            {"text": {"type": "plain_text", "text": "Fallo con Correo"}, "value": "Fallo con Correo"},
+            {"text": {"type": "plain_text", "text": "Actualización de Datos"}, "value": "Actualización de Datos"},
+            {"text": {"type": "plain_text", "text": "Otro"}, "value": "Otro"},
+        ]},
+        {"id": "usuario_reporte", "label": "Usuario del Reporte", "tipo": "texto"},
+        {"id": "descripcion", "label": "Descripción", "tipo": "texto", "multiline": True},
     ],
     "abrir_hoja": lambda: _abrir_hoja_mercadeo("Incidencias full code"),
+    "agregar_fecha": "Fecha",
     "columnas": {
-        "nombre": "Nombre", "cedula": "Cedula/Rif", "cuota": "N de Quoota",
-        "fecha_vencimiento": "Fecha de vencimiento", "monto_pendiente": "Monto pendiente(USD)",
-        "estatus": "Estatus", "descripcion": "Descripcion de la Incidencia", "reportado_por": "Reportado por",
+        "departamento": "Departamento", "empresa": "Empresa/Sede", "tipo_incidencia": "Tipo de Incidencia",
+        "usuario_reporte": "Usuario del Reporte", "descripcion": "Descripción",
     },
     "canal": "C0BNT56M79U",
-    "titulo_mensaje": "Nueva incidencia reportada (Full Code)",
+    "titulo_mensaje": "Nuevo ticket de incidencia interna",
     "emoji_mensaje": "🛠️",
     "campos_mensaje": [
-        ("Cliente", "nombre"), ("Cédula/RIF", "cedula"), ("N° de Cuota", "cuota"),
-        ("Fecha de vencimiento", "fecha_vencimiento"), ("Monto pendiente (USD)", "monto_pendiente"),
-        ("Estatus", "estatus"), ("Descripción", "descripcion"),
+        ("Departamento", "departamento"), ("Empresa/Sede", "empresa"), ("Tipo de Incidencia", "tipo_incidencia"),
+        ("Usuario del Reporte", "usuario_reporte"), ("Descripción", "descripcion"),
     ],
 }
 
@@ -2950,7 +2959,7 @@ def recibir_incidencia_fullcode(ack, body, client):
         return
     ack()
     _ejecutar_formulario_generico("reportar_incidencia", body, client)
-# ============ FIN COMANDO /reportar-incidencia ============
+# ============ FIN COMANDO /incidencia-fullcode ============
 
 
 if __name__ == "__main__":
