@@ -2500,7 +2500,19 @@ def _abrir_hoja_mercadeo(nombre_pestana):
     )
     cliente = gspread.authorize(creds)
     spreadsheet = cliente.open_by_key(SHEET_ID_MERCADEO)
-    return spreadsheet.worksheet(nombre_pestana)
+    try:
+        return spreadsheet.worksheet(nombre_pestana)
+    except gspread.exceptions.WorksheetNotFound:
+        # Busca de nuevo ignorando mayúsculas/tildes/espacios de más, por si el nombre de la
+        # pestaña en el Sheet no coincide EXACTO (ej. un espacio invisible al final del título).
+        objetivo = _normalizar_encabezado(nombre_pestana)
+        for pestana in spreadsheet.worksheets():
+            if _normalizar_encabezado(pestana.title) == objetivo:
+                return pestana
+        nombres_disponibles = ", ".join(f"'{p.title}'" for p in spreadsheet.worksheets())
+        print(f"❌ No se encontró la pestaña '{nombre_pestana}' en el Sheet. "
+              f"Pestañas disponibles: {nombres_disponibles}")
+        raise
 
 
 def guardar_conciliacion_mercadeo(fecha_reporte, nombre_colaborador, telefono, cedula, monto_bs, forma_pago,
@@ -2913,7 +2925,6 @@ FORM_SPECS["reportar_incidencia"] = {
             {"text": {"type": "plain_text", "text": "Administración"}, "value": "Administración"},
             {"text": {"type": "plain_text", "text": "Operaciones"}, "value": "Operaciones"},
         ]},
-        {"id": "empresa", "label": "Empresa/Sede", "tipo": "texto"},
         {"id": "tipo_incidencia", "label": "Tipo de Incidencia", "tipo": "select", "opciones": [
             {"text": {"type": "plain_text", "text": "Acceso"}, "value": "Acceso"},
             {"text": {"type": "plain_text", "text": "Tecnología"}, "value": "Tecnología"},
@@ -2931,14 +2942,14 @@ FORM_SPECS["reportar_incidencia"] = {
     "abrir_hoja": lambda: _abrir_hoja_mercadeo("Incidencias full code"),
     "agregar_fecha": "Fecha",
     "columnas": {
-        "departamento": "Departamento", "empresa": "Empresa/Sede", "tipo_incidencia": "Tipo de Incidencia",
+        "departamento": "Departamento", "tipo_incidencia": "Tipo de Incidencia",
         "usuario_reporte": "Usuario del Reporte", "descripcion": "Descripción",
     },
     "canal": "C0BNT56M79U",
     "titulo_mensaje": "Nuevo ticket de incidencia interna",
     "emoji_mensaje": "🛠️",
     "campos_mensaje": [
-        ("Departamento", "departamento"), ("Empresa/Sede", "empresa"), ("Tipo de Incidencia", "tipo_incidencia"),
+        ("Departamento", "departamento"), ("Tipo de Incidencia", "tipo_incidencia"),
         ("Usuario del Reporte", "usuario_reporte"), ("Descripción", "descripcion"),
     ],
 }
