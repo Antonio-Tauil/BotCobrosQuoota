@@ -1,1 +1,224 @@
+"""
+validaciones.py — Funciones de apoyo usadas por todo el bot: convertir texto a número,
+evitar guardar el mismo registro dos veces, guardar/leer en el Sheet por NOMBRE de columna
+(no por posición), y validar cédula/teléfono/fecha en los formularios.
+"""
+import re
+import unicodedata
+from datetime import datetime, date
+from zoneinfo import ZoneInfo
 
+def parse_numero(texto):
+    if texto is None:
+        raise ValueError("vacío")
+    s = re.sub(r"[^0-9.,\-]", "", str(texto).strip())
+    # Quitar separadores sobrantes al inicio/fin (ej. el punto que deja "Bs.")
+    neg = s.startswith("-")
+    s = s.lstrip("-").strip(".,")
+    if s == "":
+        raise ValueError("sin dígitos")
+    if neg:
+        s = "-" + s
+    tiene_punto = "." in s
+    tiene_coma = "," in s
+    if tiene_punto and tiene_coma:
+        if s.rfind(",") > s.rfind("."):
+            s = s.replace(".", "").replace(",", ".")
+        else:
+            s = s.replace(",", "")
+    elif tiene_coma:
+        if s.count(",") > 1:
+            s = s.replace(",", "")
+        else:
+            _, _, dec = s.partition(",")
+            s = s.replace(",", "") if len(dec) == 3 else s.replace(",", ".")
+    elif tiene_punto:
+        if s.count(".") > 1:
+            s = s.replace(".", "")
+        else:
+            _, _, dec = s.partition(".")
+            if len(dec) == 3:
+                s = s.replace(".", "")
+    return float(s)
+# ============ FIN FUNCIÓN parse_numero ============
+
+
+# ============ BLINDAJE ANTI-DUPLICADOS ============
+
+def _id_amigable(prefijo, ts):
+    try:
+        dt = datetime.fromtimestamp(float(ts), ZoneInfo("America/Caracas"))
+        frac = str(ts).split(".")[-1]
+        return f"{prefijo}-{dt.strftime('%Y%m%d-%H%M%S')}-{frac}"
+    except Exception:
+        return f"{prefijo}-{ts}"
+
+
+
+def _registro_ya_guardado(sheet, registro_id):
+    if not registro_id:
+        return False
+    objetivo = str(registro_id).strip()
+    try:
+        valores = sheet.get_all_values()
+        if not valores:
+            return False
+        encabezados = [c.strip().lower() for c in valores[0]]
+        if "id registro" in encabezados:
+            col = encabezados.index("id registro")
+            return any(len(fila) > col and str(fila[col]).strip() == objetivo for fila in valores[1:])
+        return any(str(celda).strip() == objetivo for fila in valores for celda in fila)
+    except Exception as e:
+        print(f"⚠️ No se pudo verificar duplicado: {e}")
+        return False
+
+
+
+def _ya_procesado(texto):
+    return texto.lstrip().startswith(("✅", "❌", "⚠"))
+# ============ FIN BLINDAJE ANTI-DUPLICADOS ============
+
+
+# ============ GUARDAR EN SHEETS POR NOMBRE DE COLUMNA (Fase 2 - Sostenibilidad) ============
+
+def _normalizar_encabezado(texto):
+    """Deja un encabezado listo para comparar: minúsculas, sin tildes, sin espacios de sobra."""
+    t = str(texto or "").strip().lower()
+    t = unicodedata.normalize("NFKD", t)
+    return "".join(c for c in t if not unicodedata.combining(c))
+
+
+
+def _guardar_fila_por_encabezado(sheet, datos):
+    """
+    Guarda una fila nueva en 'sheet' colocando cada valor en la columna que le corresponde
+    POR NOMBRE, no por posición. 'datos' es un diccionario {nombre_de_columna: valor}, en el
+    orden en que se quiere que caigan los datos que no tengan columna en el Sheet.
+
+    Compara los nombres de columna ignorando mayúsculas, tildes y espacios de más, para que un
+    encabezado como "Conciliación" o "Conciliacion" (con o sin tilde) se reconozca igual.
+
+    Si alguna clave de 'datos' no tiene una columna con ese nombre en el Sheet, su valor se
+    agrega al final de la fila, siempre en el mismo orden, para no perder el dato ni desalinear
+    las columnas que sí existen.
+    """
+    encabezados_sheet = sheet.row_values(1)
+    restantes = dict(datos)
+    fila = []
+    for encabezado in encabezados_sheet:
+        objetivo = _normalizar_encabezado(encabezado)
+        valor_encontrado = ""
+        for clave in list(restantes.keys()):
+            if _normalizar_encabezado(clave) == objetivo:
+                valor_encontrado = restantes.pop(clave)
+                break
+        fila.append(valor_encontrado)
+    # Cualquier dato que no tenía columna con ese nombre se agrega al final (siempre el mismo orden)
+    fila.extend(restantes.values())
+    sheet.append_row(fila)
+
+
+
+def _columna_por_nombre(ws, nombre):
+    """Ubica por NOMBRE (no por posición) el índice base-1 de una columna, comparando
+    ignorando mayúsculas, tildes y espacios de más. Devuelve None si no la encuentra."""
+    objetivo = _normalizar_encabezado(nombre)
+    encabezados = [_normalizar_encabezado(c) for c in ws.row_values(1)]
+    if objetivo in encabezados:
+        return encabezados.index(objetivo) + 1
+    return None
+# ============ FIN GUARDAR POR NOMBRE DE COLUMNA ============
+
+
+# ============ LISTA DE COBRADORES (compartida) ============
+
+
+# ============ VALIDACIÓN DE DATOS (estricta) ============
+def _es_cedula_valida(texto):
+    t = str(texto or "").strip().upper()
+    if not t:
+        return False, "La cédula está vacía."
+    t2 = t.replace(".", "").replace("-", "").replace(" ", "")
+    m = re.match(r"^([VEJPG]?)(\d+)$", t2)
+    if not m:
+        return False, "Cédula inválida. Usa números y opcional V/E/J/P (ej: V-12.345.678)."
+    digitos = m.group(2)
+    if not (6 <= len(digitos) <= 10):
+        return False, f"La cédula debe tener entre 6 y 10 dígitos (tiene {len(digitos)})."
+    return True, ""
+
+
+def _es_telefono_valido(texto):
+    t = str(texto or "").strip()
+    if not t:
+        return False, "El teléfono está vacío."
+    limpio = re.sub(r"[()\-\s+]", "", t)
+    if not limpio.isdigit():
+        return False, "El teléfono solo debe tener números (ej: 0414-1234567)."
+    n = len(limpio)
+    if n not in (10, 11, 12):
+        return False, f"El teléfono debe tener 10, 11 o 12 dígitos (tiene {n}). Ej: 04141234567."
+    return True, ""
+
+
+def _es_fecha_valida(texto):
+    t = str(texto or "").strip()
+    if not t:
+        return False, "La fecha está vacía."
+    partes = re.split(r"[/\-]", t)
+    if len(partes) != 3:
+        return False, "Fecha inválida. Usa el formato DD/MM/AAAA (ej: 25/12/2026)."
+    try:
+        d = int(partes[0]); mth = int(partes[1]); y = int(partes[2])
+    except ValueError:
+        return False, "La fecha debe tener solo números en formato DD/MM/AAAA."
+    if y < 100:
+        y += 2000
+    try:
+        date(y, mth, d)
+    except ValueError:
+        return False, "Esa fecha no existe. Revisa día/mes (formato DD/MM/AAAA)."
+    if not (2024 <= y <= 2030):
+        return False, "El año parece un error de tipeo. Usa DD/MM/AAAA (ej: 25/12/2026)."
+    return True, ""
+
+
+_VALIDADORES = {
+    "cedula": _es_cedula_valida,
+    "telefono": _es_telefono_valido,
+    "fecha": _es_fecha_valida,
+}
+
+
+def _validar_view(valores, specs):
+    """Devuelve un dict {block_id: mensaje} con los campos inválidos (vacío si todo OK)."""
+    errores = {}
+    for block_id, tipo in specs:
+        try:
+            valor = valores[block_id]["valor"]["value"]
+        except (KeyError, TypeError):
+            valor = ""
+        ok, msg = _VALIDADORES[tipo](valor)
+        if not ok:
+            errores[block_id] = msg
+    return errores
+# ============ FIN VALIDACIÓN DE DATOS ============
+
+
+# ============ MOTOR GENÉRICO DE FORMULARIOS (Fase 3 - Sostenibilidad) ============
+# En vez de que cada comando repita ~150 líneas (abrir modal, validar, guardar, publicar),
+# cada comando se describe como una "ficha" corta en FORM_SPECS: qué campos tiene el
+# formulario, en qué Sheet se guarda, en qué canal se publica. El motor (las funciones de
+# abajo) sabe leer cualquier ficha y hacer todo el trabajo. Así, agregar o ajustar un
+# comando migrado a este patrón es cuestión de editar su ficha, no de tocar el motor.
+
+def _solo_digitos(texto):
+    return re.sub(r"\D", "", str(texto or ""))
+
+
+def _quitar_acentos(texto):
+    reemplazos = (("á", "a"), ("é", "e"), ("í", "i"), ("ó", "o"), ("ú", "u"))
+    t = str(texto).lower()
+    for a, b in reemplazos:
+        t = t.replace(a, b)
+    return t
