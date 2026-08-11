@@ -1232,7 +1232,10 @@ def buscar_cliente(ack, body, client):
 
 
 # ============ TASA DEL DÍA (una vez al día) — BLINDADO ============
-# Se guarda en la pestaña "Indicadores": A20=etiqueta, B20=valor, C20=fecha
+# La tasa vigente y su historial viven SOLO en la pestaña "Historial Tasas" (columnas por
+# nombre: Fecha, Tasa). La pestaña "Indicadores" ya NO se toca — se dejó libre para el
+# tablero de rendimiento. _abrir_indicadores()/FILA_TASA quedan sin usar por si se necesitan
+# más adelante, pero ninguna función de la tasa los llama ya.
 FILA_TASA = 20
 TASA_MIN = 1            # una tasa por debajo de 1 Bs/USD es imposible
 TASA_MAX = 100_000_000  # tope de seguridad para atrapar tipeos absurdos
@@ -1240,7 +1243,8 @@ TASA_CAMBIO_ALERTA = 0.5  # avisa si la nueva tasa cambia más de 50% vs la ante
 
 
 def _abrir_indicadores():
-    """Abre la hoja 'Indicadores'. Devuelve None si hay cualquier problema (nunca lanza error)."""
+    """Abre la hoja 'Indicadores'. Devuelve None si hay cualquier problema (nunca lanza error).
+    Ya no la usa ninguna función de la tasa del día (ver comentario arriba)."""
     try:
         cliente = get_cliente_busqueda()
         spreadsheet = cliente.open_by_key(os.environ["SHEET_ID"])
@@ -1261,21 +1265,11 @@ def _abrir_indicadores():
 
 
 def _guardar_tasa_dia(valor_num):
-    """Guarda la tasa de HOY (etiqueta + valor + fecha) en una sola operación. Devuelve True/False.
-    También la deja registrada en el historial (pestaña 'Historial Tasas'), para poder
-    consultarla más adelante si alguien reporta un pago atrasado de este mismo día."""
-    ws = _abrir_indicadores()
-    if ws is None:
-        return False
+    """Guarda la tasa de HOY en la pestaña 'Historial Tasas' (una fila por fecha). Ya NO se
+    guarda en 'Indicadores' — esa pestaña se dejó solo para el tablero de rendimiento, sin
+    mezclar ahí los datos de la tasa. Devuelve True/False."""
     hoy_txt = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y")
-    try:
-        # Una sola escritura (A20:C20) para evitar quedar a medias
-        ws.update(f"A{FILA_TASA}:C{FILA_TASA}", [["Tasa del día", str(valor_num), hoy_txt]])
-        _guardar_en_historial_tasas(hoy_txt, valor_num)
-        return True
-    except Exception as e:
-        print(f"❌ Tasa: error guardando: {type(e).__name__}: {e}")
-        return False
+    return _guardar_en_historial_tasas(hoy_txt, valor_num)
 
 
 def _abrir_historial_tasas():
@@ -1358,25 +1352,56 @@ def _tasa_de_fecha(fecha_str):
 
 def _tasa_de_pago(fecha_pago, hoy_txt):
     """Devuelve la tasa aplicable para un pago del día 'fecha_pago'.
-    Si es de hoy, usa la tasa de hoy (Indicadores). Si es de otro día, la busca en el
-    historial. Devuelve None si no hay ninguna tasa válida para esa fecha."""
+    Si es de hoy, usa la tasa de hoy (Historial Tasas). Si es de otro día, también la
+    busca en el historial. Devuelve None si no hay ninguna tasa válida para esa fecha."""
     if fecha_pago == hoy_txt:
         return _tasa_de_hoy()
     return _tasa_de_fecha(fecha_pago)
 
 
 def _leer_tasa_dia():
-    """Devuelve (valor_str, fecha_str) o (None, None). Nunca lanza error."""
-    ws = _abrir_indicadores()
+    """Devuelve (valor_str, fecha_str) de la tasa de HOY, leída de 'Historial Tasas' (ya no
+    de 'Indicadores'). Si hoy todavía no tiene tasa registrada, devuelve (None, None).
+    Nunca lanza error."""
+    hoy_txt = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y")
+    ws = _abrir_historial_tasas()
     if ws is None:
         return None, None
     try:
-        valor = ws.cell(FILA_TASA, 2).value
-        fecha = ws.cell(FILA_TASA, 3).value
-        return valor, fecha
-    except Exception as e:
-        print(f"⚠️ Tasa: error leyendo: {type(e).__name__}: {e}")
+        col_fecha, col_tasa = _buscar_columnas_historial_tasas(ws)
+        if col_fecha is None or col_tasa is None:
+            return None, None
+        valores = ws.get_all_values()
+        for fila in valores[1:]:
+            if len(fila) > col_fecha and str(fila[col_fecha]).strip() == hoy_txt:
+                valor = fila[col_tasa] if len(fila) > col_tasa else None
+                return (valor or None), hoy_txt
         return None, None
+    except Exception as e:
+        print(f"⚠️ Tasa: error leyendo de Historial Tasas: {type(e).__name__}: {e}")
+        return None, None
+
+
+def _ultima_tasa_registrada():
+    """Para el aviso de 'cambio grande' de /tasa-hoy: devuelve el valor de la ÚLTIMA fila del
+    historial (normalmente la de ayer), sin importar si hoy ya tiene tasa o no. Solo se usa
+    para comparar y avisar si el nuevo valor cambia demasiado (posible error de tipeo)."""
+    ws = _abrir_historial_tasas()
+    if ws is None:
+        return None
+    try:
+        col_fecha, col_tasa = _buscar_columnas_historial_tasas(ws)
+        if col_fecha is None or col_tasa is None:
+            return None
+        filas = ws.get_all_values()[1:]
+        if not filas:
+            return None
+        ultima = filas[-1]
+        if len(ultima) <= col_tasa or not ultima[col_tasa]:
+            return None
+        return ultima[col_tasa]
+    except Exception:
+        return None
 
 
 def _tasa_de_hoy():
@@ -1467,6 +1492,8 @@ def tasa_hoy(ack, body, client):
     aviso_cambio = ""
     try:
         valor_ant, _fecha_ant = _leer_tasa_dia()
+        if not valor_ant:
+            valor_ant = _ultima_tasa_registrada()  # si hoy no tenía tasa aún, compara contra la de ayer
         if valor_ant:
             ant = parse_numero(valor_ant)
             if ant and ant > 0:
@@ -1479,7 +1506,8 @@ def tasa_hoy(ack, body, client):
 
     if not _guardar_tasa_dia(valor_num):
         client.chat_postEphemeral(channel=canal, user=usuario,
-            text="❌ No pude guardar la tasa (revisa que exista la hoja 'Indicadores'). Intenta de nuevo.")
+            text=(f"❌ No pude guardar la tasa (revisa que exista la pestaña "
+                  f"'{PESTANA_HISTORIAL_TASAS}' con columnas 'Fecha' y 'Tasa'). Intenta de nuevo."))
         return
 
     try:
