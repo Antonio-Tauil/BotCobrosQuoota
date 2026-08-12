@@ -1,0 +1,239 @@
+"""
+reportes.py — Reporte semanal automático de las áreas que manejan pagos. Cada lunes en
+la mañana (hora Venezuela) se arma un resumen de la semana pasada (lunes a domingo) para
+cada área, y se publica en el canal de esa misma área — así queda un registro semanal sin
+que nadie tenga que armarlo a mano.
+
+Áreas incluidas (todas las que registran un monto de pago):
+  1. Cobranzas (/cobro + /domiciliar juntos)      -> #cobranzas-log
+  2. Call Center (/cobro-callcenter)               -> mismo canal del comando
+  3. Comercial (/cobro-comercial)                  -> mismo canal del comando
+  4. Conciliación de Cobranzas (/conciliar)        -> mismo canal del comando (solo Bs, no
+     guarda un monto en USD)
+  5. Mercadeo, Conciliación de Pagos (/merca-reporte) -> canal de mercadeo-pagos
+
+No incluidas (porque no registran un monto de pago): /contactar, /contacto-legal,
+/clientes-escalados, /liquidacion-nueva, /liquidacion-estatus, /incidencia-fullcode,
+Incidencias Técnicas de Mercadeo.
+"""
+import os
+import re
+import json
+import gspread
+from datetime import datetime, date, timedelta
+from zoneinfo import ZoneInfo
+from google.oauth2.service_account import Credentials
+
+from config import app, SHEET_ID_MERCADEO, CANAL_CIERRE, CANAL_MERCADEO_PAGOS
+from validaciones import parse_numero, _columna_por_nombre
+from motor_formularios import FORM_SPECS
+from cobros import _abrir_hoja_domiciliacion, _abrir_hoja_cobro2, _abrir_hoja_conciliacion, _abrir_hoja_comercial
+from mercadeo import _abrir_hoja_mercadeo
+
+
+# ============ REPORTE SEMANAL DE PAGOS (lunes en la mañana) ============
+
+def _abrir_hoja_pagos_recibidos():
+    """Abre la misma hoja 'Pagos Recibidos' (SHEET_ID) donde se guardan los cobros de
+    /cobro, igual que hace el Cierre Diario en promesas.py."""
+    creds_json = json.loads(os.environ["GOOGLE_CREDENTIALS"])
+    creds_json["private_key"] = creds_json["private_key"].replace("\\n", "\n")
+    creds = Credentials.from_service_account_info(
+        creds_json,
+        scopes=["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+    )
+    cliente = gspread.authorize(creds)
+    try:
+        return cliente.open_by_key(os.environ["SHEET_ID"]).worksheet("Pagos Recibidos")
+    except Exception as e:
+        print(f"❌ Reporte semanal: no se encontró la hoja 'Pagos Recibidos': {e}")
+        return None
+
+
+def _parsear_fecha(texto):
+    """Convierte 'DD/MM/AAAA' (o con '-') a un date de Python. Devuelve None si no se
+    puede leer (celda vacía, formato raro, etc.) — esas filas simplemente se ignoran."""
+    t = str(texto or "").strip()
+    if not t:
+        return None
+    partes = re.split(r"[/\-]", t)
+    if len(partes) != 3:
+        return None
+    try:
+        d, m, y = int(partes[0]), int(partes[1]), int(partes[2])
+        if y < 100:
+            y += 2000
+        return date(y, m, d)
+    except ValueError:
+        return None
+
+
+def _parse_monto_seguro(texto):
+    """Igual que parse_numero, pero nunca lanza error: si el texto no es un número
+    (celda vacía, '(No calculable)', etc.), simplemente cuenta como 0."""
+    try:
+        return parse_numero(texto)
+    except (ValueError, ZeroDivisionError, TypeError):
+        return 0.0
+
+
+def _sumar_area(ws, col_fecha, col_monto_bs, col_monto_usd, col_persona, lunes, domingo):
+    """Lee 'ws' y suma lo registrado entre 'lunes' y 'domingo' (ambos incluidos): total en
+    Bs, total en USD (si se pasó esa columna), cantidad de casos, y un desglose por persona
+    (si se pasó esa columna). Si no encuentra alguna columna esperada, avisa por consola y
+    sigue con lo que sí pudo leer — nunca detiene el resto del reporte."""
+    resumen = {"conteo": 0, "total_bs": 0.0, "total_usd": 0.0, "por_persona": {}}
+    if ws is None:
+        return resumen
+    try:
+        idx_fecha = _columna_por_nombre(ws, col_fecha)
+        idx_bs = _columna_por_nombre(ws, col_monto_bs) if col_monto_bs else None
+        idx_usd = _columna_por_nombre(ws, col_monto_usd) if col_monto_usd else None
+        idx_persona = _columna_por_nombre(ws, col_persona) if col_persona else None
+        if idx_fecha is None:
+            print(f"⚠️ Reporte semanal: no se encontró la columna de fecha '{col_fecha}' en '{ws.title}'.")
+            return resumen
+        valores = ws.get_all_values()
+    except Exception as e:
+        print(f"⚠️ Reporte semanal: error abriendo '{getattr(ws, 'title', '?')}': {type(e).__name__}: {e}")
+        return resumen
+
+    def celda(fila, idx):
+        return fila[idx - 1].strip() if idx and len(fila) >= idx else ""
+
+    for fila in valores[1:]:
+        fecha_txt = celda(fila, idx_fecha).split()[0] if celda(fila, idx_fecha) else ""
+        fecha = _parsear_fecha(fecha_txt)
+        if fecha is None or not (lunes <= fecha <= domingo):
+            continue
+        resumen["conteo"] += 1
+        monto_bs = _parse_monto_seguro(celda(fila, idx_bs)) if idx_bs else 0.0
+        monto_usd = _parse_monto_seguro(celda(fila, idx_usd)) if idx_usd else 0.0
+        resumen["total_bs"] += monto_bs
+        resumen["total_usd"] += monto_usd
+        if idx_persona:
+            persona = celda(fila, idx_persona) or "(sin especificar)"
+            persona = " ".join(persona.split()).upper()
+            resumen["por_persona"][persona] = resumen["por_persona"].get(persona, 0.0) + monto_bs
+    return resumen
+
+
+def _combinar_resumenes(*resumenes):
+    """Junta dos o más resúmenes de _sumar_area en uno solo (para 'Cobranzas', que junta
+    /cobro y /domiciliar en un mismo reporte)."""
+    total = {"conteo": 0, "total_bs": 0.0, "total_usd": 0.0, "por_persona": {}}
+    for r in resumenes:
+        total["conteo"] += r["conteo"]
+        total["total_bs"] += r["total_bs"]
+        total["total_usd"] += r["total_usd"]
+        for persona, monto in r["por_persona"].items():
+            total["por_persona"][persona] = total["por_persona"].get(persona, 0.0) + monto
+    return total
+
+
+def _formatear_reporte(titulo, emoji, resumen, lunes, domingo, mostrar_usd=True):
+    lineas = [
+        f"{emoji} *Reporte semanal — {titulo}*",
+        f"Semana: {lunes.strftime('%d/%m/%Y')} al {domingo.strftime('%d/%m/%Y')}",
+        "",
+    ]
+    if resumen["conteo"] == 0:
+        lineas.append("No hubo registros esta semana.")
+        return "\n".join(lineas)
+    if mostrar_usd:
+        lineas.append(f"💰 *Total:* Bs. {resumen['total_bs']:,.2f}  ·  ${resumen['total_usd']:,.2f}")
+    else:
+        lineas.append(f"💰 *Total:* Bs. {resumen['total_bs']:,.2f}")
+    lineas.append(f"📝 *Casos:* {resumen['conteo']}")
+    if resumen["por_persona"]:
+        lineas.append("")
+        lineas.append("*Por persona:*")
+        for persona in sorted(resumen["por_persona"].keys(), key=lambda p: resumen["por_persona"][p], reverse=True):
+            lineas.append(f"   • {persona.title()} — Bs. {resumen['por_persona'][persona]:,.2f}")
+    return "\n".join(lineas)
+
+
+def _rango_semana_pasada():
+    """La semana pasada completa (lunes a domingo), sin importar qué día se llame esta
+    función — así /probar-reporte-semanal siempre da la última semana cerrada."""
+    hoy = datetime.now(ZoneInfo("America/Caracas")).date()
+    lunes_actual = hoy - timedelta(days=hoy.weekday())
+    domingo_pasado = lunes_actual - timedelta(days=1)
+    lunes_pasado = domingo_pasado - timedelta(days=6)
+    return lunes_pasado, domingo_pasado
+
+
+def generar_reportes_semanales():
+    """Se ejecuta cada lunes en la mañana: arma el resumen de la semana pasada para cada
+    área que maneja pagos, y lo publica en el canal de esa misma área. Cada área se
+    procesa por separado (con su propio try/except) para que un problema en una no
+    impida que las demás se publiquen."""
+    lunes_pasado, domingo_pasado = _rango_semana_pasada()
+
+    try:
+        r_cobro = _sumar_area(_abrir_hoja_pagos_recibidos(), "Fecha", "MontoBs", "MontoUsd",
+                               "Cobrador", lunes_pasado, domingo_pasado)
+        r_domic = _sumar_area(_abrir_hoja_domiciliacion(), "Fecha", "Monto recuperado Bs", "MontoUsd",
+                               "Cobrador", lunes_pasado, domingo_pasado)
+        r_cobranzas = _combinar_resumenes(r_cobro, r_domic)
+        app.client.chat_postMessage(
+            channel=CANAL_CIERRE,
+            text=_formatear_reporte("Cobranzas", "📊", r_cobranzas, lunes_pasado, domingo_pasado)
+        )
+    except Exception as e:
+        print(f"❌ Reporte semanal [Cobranzas]: error: {type(e).__name__}: {e}")
+
+    try:
+        r_cc = _sumar_area(_abrir_hoja_cobro2(), "Fecha", "MontoBs", "MontoUsd",
+                            None, lunes_pasado, domingo_pasado)
+        app.client.chat_postMessage(
+            channel=FORM_SPECS["cobro_callcenter"]["canal"],
+            text=_formatear_reporte("Call Center", "📞", r_cc, lunes_pasado, domingo_pasado)
+        )
+    except Exception as e:
+        print(f"❌ Reporte semanal [Call Center]: error: {type(e).__name__}: {e}")
+
+    try:
+        r_com = _sumar_area(_abrir_hoja_comercial(), "Fecha", "MontoBs", "MontoUsd",
+                             None, lunes_pasado, domingo_pasado)
+        app.client.chat_postMessage(
+            channel=FORM_SPECS["cobro_comercial"]["canal"],
+            text=_formatear_reporte("Comercial", "🤝", r_com, lunes_pasado, domingo_pasado)
+        )
+    except Exception as e:
+        print(f"❌ Reporte semanal [Comercial]: error: {type(e).__name__}: {e}")
+
+    try:
+        r_conc = _sumar_area(_abrir_hoja_conciliacion(), "Fecha conciliación", "Monto reportado",
+                              None, "Conciliador", lunes_pasado, domingo_pasado)
+        app.client.chat_postMessage(
+            channel=FORM_SPECS["conciliar"]["canal"],
+            text=_formatear_reporte("Conciliación de Cobranzas", "🧾", r_conc, lunes_pasado, domingo_pasado,
+                                     mostrar_usd=False)
+        )
+    except Exception as e:
+        print(f"❌ Reporte semanal [Conciliación]: error: {type(e).__name__}: {e}")
+
+    try:
+        r_merc = _sumar_area(_abrir_hoja_mercadeo("Conciliacion"), "Fecha de Reporte", "Monto en Bs",
+                              "Monto en USD", None, lunes_pasado, domingo_pasado)
+        app.client.chat_postMessage(
+            channel=CANAL_MERCADEO_PAGOS,
+            text=_formatear_reporte("Mercadeo (Pagos)", "🛒", r_merc, lunes_pasado, domingo_pasado)
+        )
+    except Exception as e:
+        print(f"❌ Reporte semanal [Mercadeo]: error: {type(e).__name__}: {e}")
+
+    print("✅ Reportes semanales generados.")
+
+
+# Comando manual para probar los reportes sin esperar al lunes
+@app.command("/probar-reporte-semanal")
+def probar_reporte_semanal(ack, body, client):
+    ack()
+    client.chat_postEphemeral(
+        channel=body["channel_id"], user=body["user_id"],
+        text="⏳ Generando los reportes semanales ahora mismo... revisa cada canal de área."
+    )
+    generar_reportes_semanales()
+# ============ FIN REPORTE SEMANAL DE PAGOS ============
