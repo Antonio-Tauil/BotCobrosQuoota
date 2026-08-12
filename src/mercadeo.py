@@ -14,7 +14,7 @@ from google.oauth2.service_account import Credentials
 from config import app, SHEET_ID_MERCADEO, CANAL_MERCADEO_PAGOS, CANAL_MERCADEO_INCIDENCIAS
 from validaciones import (
     _normalizar_encabezado, _guardar_fila_por_encabezado, _registro_ya_guardado,
-    _id_amigable, _ya_procesado, parse_numero, _validar_view,
+    _id_amigable, _ya_procesado, parse_numero, _validar_view, _reservar_mensaje,
 )
 from motor_formularios import FORM_SPECS, _abrir_formulario_generico, _validar_formulario_generico, _ejecutar_formulario_generico
 
@@ -240,7 +240,8 @@ def elegir_tipo_mercadeo(ack, body):
 @app.view("form_merca_conciliacion")
 def recibir_conciliacion_mercadeo(ack, body, client):
     _v = body["view"]["state"]["values"]
-    _err = _validar_view(_v, [('telefono', 'telefono'), ('cedula', 'cedula'), ('fecha_pago', 'fecha')])
+    _err = _validar_view(_v, [('telefono', 'telefono'), ('cedula', 'cedula'), ('fecha_pago', 'fecha'),
+                               ('monto_bs', 'monto'), ('tasa_bcv', 'monto')])
     if _err:
         ack(response_action="errors", errors=_err)
         return
@@ -319,6 +320,8 @@ def aprobar_merca_conciliacion(ack, body, client):
     texto_original = body["message"]["blocks"][0]["text"]["text"]
     if _ya_procesado(texto_original):
         return
+    if not _reservar_mensaje(body["message"]["ts"]):
+        return  # alguien más ya está procesando este mismo clic (doble clic o dos personas a la vez)
     fecha_revision = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y")
     registro_id = _id_amigable("MERCACONC", body["message"]["ts"])
     resultado = "ERROR"
@@ -347,6 +350,8 @@ def rechazar_merca_conciliacion(ack, body, client):
     texto_original = body["message"]["blocks"][0]["text"]["text"]
     if _ya_procesado(texto_original):
         return
+    if not _reservar_mensaje(body["message"]["ts"]):
+        return  # alguien más ya está procesando este mismo clic (doble clic o dos personas a la vez)
     fecha_revision = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y")
     client.chat_update(
         channel=body["channel"]["id"], ts=body["message"]["ts"], text="Conciliación de Mercadeo RECHAZADA",
@@ -407,6 +412,8 @@ def aprobar_merca_incidencia(ack, body, client):
     texto_original = body["message"]["blocks"][0]["text"]["text"]
     if _ya_procesado(texto_original):
         return
+    if not _reservar_mensaje(body["message"]["ts"]):
+        return  # alguien más ya está procesando este mismo clic (doble clic o dos personas a la vez)
     fecha_revision = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y")
     registro_id = _id_amigable("MERCAINC", body["message"]["ts"])
     resultado = "ERROR"
@@ -434,6 +441,8 @@ def rechazar_merca_incidencia(ack, body, client):
     texto_original = body["message"]["blocks"][0]["text"]["text"]
     if _ya_procesado(texto_original):
         return
+    if not _reservar_mensaje(body["message"]["ts"]):
+        return  # alguien más ya está procesando este mismo clic (doble clic o dos personas a la vez)
     fecha_revision = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y")
     client.chat_update(
         channel=body["channel"]["id"], ts=body["message"]["ts"], text="Incidencia técnica RECHAZADA",
