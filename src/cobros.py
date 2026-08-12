@@ -18,7 +18,7 @@ from config import (
 from validaciones import (
     _normalizar_encabezado, _guardar_fila_por_encabezado, _columna_por_nombre,
     _registro_ya_guardado, _id_amigable, _ya_procesado, _solo_digitos, _quitar_acentos,
-    parse_numero, _es_fecha_valida,
+    parse_numero, _es_fecha_valida, _reservar_mensaje,
 )
 from motor_formularios import (
     FORM_SPECS, _construir_blocks_formulario, _abrir_formulario_generico,
@@ -148,7 +148,7 @@ FORM_SPECS["cobro"] = {
         {"id": "descripcion", "label": "Nombre del Cliente", "tipo": "texto"},
         {"id": "cedula", "label": "Cédula del Cliente", "tipo": "texto", "validar": "cedula"},
         {"id": "numero", "label": "Teléfono o Referencia", "tipo": "texto"},
-        {"id": "monto_bs", "label": "Monto en Bs", "tipo": "texto"},
+        {"id": "monto_bs", "label": "Monto en Bs", "tipo": "texto", "validar": "monto"},
         {"id": "forma_pago", "label": "Forma de Pago", "tipo": "select", "opciones": [
             {"text": {"type": "plain_text", "text": "Pago Móvil"}, "value": "Pago Movil"},
             {"text": {"type": "plain_text", "text": "Transferencia"}, "value": "Transferencia"},
@@ -257,6 +257,8 @@ def aprobar(ack, body, client):
     texto_original = body["message"]["blocks"][0]["text"]["text"]
     if _ya_procesado(texto_original):
         return
+    if not _reservar_mensaje(body["message"]["ts"]):
+        return  # alguien más ya está procesando este mismo clic (doble clic o dos personas a la vez)
     fecha_revision = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y")
     registro_id = _id_amigable("COBRO", body["message"]["ts"])
     resultado = "ERROR"
@@ -285,6 +287,8 @@ def rechazar(ack, body, client):
     texto_original = body["message"]["blocks"][0]["text"]["text"]
     if _ya_procesado(texto_original):
         return
+    if not _reservar_mensaje(body["message"]["ts"]):
+        return  # alguien más ya está procesando este mismo clic (doble clic o dos personas a la vez)
     fecha_revision = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y")
     client.chat_update(
         channel=body["channel"]["id"], ts=body["message"]["ts"], text="Cobro RECHAZADO",
@@ -340,7 +344,7 @@ FORM_SPECS["domiciliar"] = {
     "campos": [
         {"id": "empresa", "label": "Empresa", "tipo": "texto"},
         {"id": "cuenta", "label": "Cuenta por cobrar", "tipo": "texto"},
-        {"id": "monto_bs", "label": "Monto en Bs", "tipo": "texto"},
+        {"id": "monto_bs", "label": "Monto en Bs", "tipo": "texto", "validar": "monto"},
         {"id": "banco", "label": "Banco", "tipo": "select", "opciones": [
             {"text": {"type": "plain_text", "text": "BDV - Banco de Venezuela"}, "value": "BDV"},
             {"text": {"type": "plain_text", "text": "BNC - Banco Nacional de Crédito"}, "value": "BNC"},
@@ -440,7 +444,7 @@ FORM_SPECS["cobro_callcenter"] = {
         {"id": "nombre", "label": "Nombre del Cliente", "tipo": "texto"},
         {"id": "cedula", "label": "Cédula del Cliente", "tipo": "texto", "validar": "cedula"},
         {"id": "telefono", "label": "Teléfono", "tipo": "texto", "validar": "telefono"},
-        {"id": "monto_bs", "label": "Monto en Bs", "tipo": "texto"},
+        {"id": "monto_bs", "label": "Monto en Bs", "tipo": "texto", "validar": "monto"},
         {"id": "forma_pago", "label": "Forma de Pago", "tipo": "select", "opciones": [
             {"text": {"type": "plain_text", "text": "Pago Móvil"}, "value": "Pago Movil"},
             {"text": {"type": "plain_text", "text": "Transferencia"}, "value": "Transferencia"},
@@ -580,8 +584,8 @@ FORM_SPECS["conciliar"] = {
             {"text": {"type": "plain_text", "text": "Banesco"}, "value": "Banesco"},
             {"text": {"type": "plain_text", "text": "Otro"}, "value": "Otro"},
         ]},
-        {"id": "monto_reportado", "label": "Monto reportado (Bs)", "tipo": "texto"},
-        {"id": "monto_banco", "label": "Monto según el banco (Bs)", "tipo": "texto"},
+        {"id": "monto_reportado", "label": "Monto reportado (Bs)", "tipo": "texto", "validar": "monto"},
+        {"id": "monto_banco", "label": "Monto según el banco (Bs)", "tipo": "texto", "validar": "monto"},
         {"id": "fecha_movimiento", "label": "Fecha del movimiento bancario (DD/MM/YYYY)", "tipo": "texto", "validar": "fecha"},
         {"id": "conciliador", "label": "Conciliador", "tipo": "select", "opciones": _opciones_cobradores},
         {"id": "observaciones", "label": "Observaciones", "tipo": "texto", "multiline": True, "opcional": True},
@@ -805,6 +809,8 @@ def aprobar_liquidacion_estatus(ack, body, client):
     texto_original = body["message"]["blocks"][0]["text"]["text"]
     if _ya_procesado(texto_original):
         return
+    if not _reservar_mensaje(body["message"]["ts"]):
+        return  # alguien más ya está procesando este mismo clic (doble clic o dos personas a la vez)
     fecha_revision = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y")
     meta = body["message"].get("metadata", {}).get("event_payload", {})
     encontrado = actualizar_estatus_liquidacion(meta.get("cedula", ""), meta.get("estatus", ""), fecha_revision)
@@ -852,7 +858,7 @@ FORM_SPECS["cobro_comercial"] = {
         {"id": "nombre", "label": "Nombre del Cliente", "tipo": "texto"},
         {"id": "cedula", "label": "Cédula del Cliente", "tipo": "texto", "validar": "cedula"},
         {"id": "telefono", "label": "Teléfono", "tipo": "texto", "validar": "telefono"},
-        {"id": "monto_bs", "label": "Monto en Bs", "tipo": "texto"},
+        {"id": "monto_bs", "label": "Monto en Bs", "tipo": "texto", "validar": "monto"},
         {"id": "forma_pago", "label": "Forma de Pago", "tipo": "select", "opciones": [
             {"text": {"type": "plain_text", "text": "Pago Móvil"}, "value": "Pago Movil"},
             {"text": {"type": "plain_text", "text": "Transferencia"}, "value": "Transferencia"},
