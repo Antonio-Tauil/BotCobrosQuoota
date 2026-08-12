@@ -5,6 +5,7 @@ evitar guardar el mismo registro dos veces, guardar/leer en el Sheet por NOMBRE 
 """
 import re
 import unicodedata
+import threading
 from datetime import datetime, date
 from zoneinfo import ZoneInfo
 
@@ -76,6 +77,26 @@ def _registro_ya_guardado(sheet, registro_id):
 
 def _ya_procesado(texto):
     return texto.lstrip().startswith(("✅", "❌", "⚠"))
+
+
+# Blindaje contra doble clic / dos personas aprobando (o rechazando) el mismo mensaje casi
+# al mismo tiempo: _ya_procesado() de arriba no alcanza a atajarlo, porque los dos clics le
+# llegan al bot con el texto del mensaje TODAVÍA sin marcar "APROBADO" (Slack no espera a que
+# el primero termine para mandar el segundo). _reservar_mensaje() se usa ANTES de tocar el
+# Sheet: el primer clic "reserva" el mensaje y sigue de largo; cualquier otro clic sobre el
+# mismo mensaje mientras tanto se ignora, evitando que se guarde el mismo cobro dos veces.
+_LOCK_APROBACION = threading.Lock()
+_MENSAJES_EN_PROCESO = set()
+
+
+def _reservar_mensaje(ts):
+    """True si se pudo reservar este mensaje (nadie más lo está procesando); False si ya
+    se estaba procesando (doble clic, o dos personas casi al mismo tiempo)."""
+    with _LOCK_APROBACION:
+        if ts in _MENSAJES_EN_PROCESO:
+            return False
+        _MENSAJES_EN_PROCESO.add(ts)
+        return True
 # ============ FIN BLINDAJE ANTI-DUPLICADOS ============
 
 
@@ -183,10 +204,33 @@ def _es_fecha_valida(texto):
     return True, ""
 
 
+MONTO_MIN = 0.01           # un monto de 0 o negativo no es un cobro real
+MONTO_MAX = 5_000_000_000  # tope de seguridad para atrapar tipeos absurdos (ej. ceros de más)
+
+
+def _es_monto_valido(texto):
+    """Valida un campo de monto en Bs (o USD): tiene que ser un número, mayor que 0, y
+    dentro de un rango razonable (blinda contra tipeos como '5000000000' de más, o un
+    número negativo por error)."""
+    t = str(texto or "").strip()
+    if not t:
+        return False, "El monto está vacío."
+    try:
+        num = parse_numero(t)
+    except (ValueError, ZeroDivisionError, TypeError):
+        return False, "Ese monto no es un número válido. Ejemplo: 1500,50."
+    if num < MONTO_MIN:
+        return False, "El monto no puede ser cero ni negativo."
+    if num > MONTO_MAX:
+        return False, f"El monto *{num:,.2f}* parece un error de tipeo (demasiado alto). Revisa y vuelve a intentar."
+    return True, ""
+
+
 _VALIDADORES = {
     "cedula": _es_cedula_valida,
     "telefono": _es_telefono_valido,
     "fecha": _es_fecha_valida,
+    "monto": _es_monto_valido,
 }
 
 
