@@ -13,6 +13,7 @@ import motor_formularios  # noqa: F401  (motor genérico, sin comandos propios)
 import cobros             # noqa: F401  (registra /cobro, /domiciliar, /conciliar, etc.)
 import mercadeo           # noqa: F401  (registra /merca-reporte)
 import promesas           # noqa: F401  (registra /mis-promesas, /promesa-cumplida, etc.)
+import reportes           # noqa: F401  (registra /probar-reporte-semanal)
 from scheduler import iniciar_scheduler
 
 
