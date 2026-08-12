@@ -1241,6 +1241,14 @@ TASA_MIN = 1            # una tasa por debajo de 1 Bs/USD es imposible
 TASA_MAX = 100_000_000  # tope de seguridad para atrapar tipeos absurdos
 TASA_CAMBIO_ALERTA = 0.5  # avisa si la nueva tasa cambia más de 50% vs la anterior
 
+# Copia en memoria de la tasa de HOY, para que /cobro no tenga que esperar a Google Sheets
+# en cada envío del formulario (la tasa casi nunca cambia de un minuto a otro). Se refresca
+# sola cada TASA_CACHE_SEGUNDOS, y también al instante en cuanto alguien fija una tasa nueva
+# con /tasa-hoy (ver _guardar_tasa_dia) — nunca se le entrega a alguien un valor "viejo" a
+# propósito, solo se evita consultar el Sheet de más.
+TASA_CACHE_SEGUNDOS = 120
+_CACHE_TASA_HOY = {"valor": None, "fecha": None, "expira": None}
+
 
 def _abrir_indicadores():
     """Abre la hoja 'Indicadores'. Devuelve None si hay cualquier problema (nunca lanza error).
@@ -1268,8 +1276,16 @@ def _guardar_tasa_dia(valor_num):
     """Guarda la tasa de HOY en la pestaña 'Historial Tasas' (una fila por fecha). Ya NO se
     guarda en 'Indicadores' — esa pestaña se dejó solo para el tablero de rendimiento, sin
     mezclar ahí los datos de la tasa. Devuelve True/False."""
-    hoy_txt = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y")
-    return _guardar_en_historial_tasas(hoy_txt, valor_num)
+    ahora = datetime.now(ZoneInfo("America/Caracas"))
+    hoy_txt = ahora.strftime("%d/%m/%Y")
+    ok = _guardar_en_historial_tasas(hoy_txt, valor_num)
+    if ok:
+        # Actualiza la copia en memoria AL INSTANTE — así el próximo /cobro ya ve la tasa
+        # recién puesta, sin tener que esperar a que se venza el caché.
+        _CACHE_TASA_HOY["valor"] = str(valor_num)
+        _CACHE_TASA_HOY["fecha"] = hoy_txt
+        _CACHE_TASA_HOY["expira"] = ahora + timedelta(seconds=TASA_CACHE_SEGUNDOS)
+    return ok
 
 
 def _abrir_historial_tasas():
@@ -1360,10 +1376,16 @@ def _tasa_de_pago(fecha_pago, hoy_txt):
 
 
 def _leer_tasa_dia():
-    """Devuelve (valor_str, fecha_str) de la tasa de HOY, leída de 'Historial Tasas' (ya no
-    de 'Indicadores'). Si hoy todavía no tiene tasa registrada, devuelve (None, None).
-    Nunca lanza error."""
-    hoy_txt = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y")
+    """Devuelve (valor_str, fecha_str) de la tasa de HOY. Primero mira la copia en memoria
+    (ver TASA_CACHE_SEGUNDOS) — si está fresca y es de hoy, la devuelve sin tocar el Sheet.
+    Si no, consulta 'Historial Tasas' de verdad y refresca la copia. Si hoy todavía no tiene
+    tasa registrada, devuelve (None, None). Nunca lanza error."""
+    ahora = datetime.now(ZoneInfo("America/Caracas"))
+    hoy_txt = ahora.strftime("%d/%m/%Y")
+    cache = _CACHE_TASA_HOY
+    if cache["fecha"] == hoy_txt and cache["expira"] is not None and ahora < cache["expira"]:
+        return (cache["valor"], hoy_txt) if cache["valor"] else (None, None)
+
     ws = _abrir_historial_tasas()
     if ws is None:
         return None, None
@@ -1372,11 +1394,16 @@ def _leer_tasa_dia():
         if col_fecha is None or col_tasa is None:
             return None, None
         valores = ws.get_all_values()
+        valor_encontrado = None
         for fila in valores[1:]:
             if len(fila) > col_fecha and str(fila[col_fecha]).strip() == hoy_txt:
-                valor = fila[col_tasa] if len(fila) > col_tasa else None
-                return (valor or None), hoy_txt
-        return None, None
+                valor_encontrado = fila[col_tasa] if len(fila) > col_tasa else None
+                break
+        valor_final = valor_encontrado or None
+        _CACHE_TASA_HOY["valor"] = valor_final
+        _CACHE_TASA_HOY["fecha"] = hoy_txt
+        _CACHE_TASA_HOY["expira"] = ahora + timedelta(seconds=TASA_CACHE_SEGUNDOS)
+        return (valor_final, hoy_txt) if valor_final else (None, None)
     except Exception as e:
         print(f"⚠️ Tasa: error leyendo de Historial Tasas: {type(e).__name__}: {e}")
         return None, None
