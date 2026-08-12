@@ -46,6 +46,49 @@ def _manejar_error_global(error, body, logger):
 # ============ FIN ALERTAS ============
 
 
+# ============ /ayuda: lista de comandos disponibles ============
+@app.command("/ayuda")
+def _mostrar_ayuda(ack, respond):
+    """Muestra la lista de comandos del bot, solo visible para quien lo escribió (no se
+    publica en el canal). Útil para que alguien nuevo en el equipo aprenda a usar el bot
+    sin tener que preguntarle a Antonio."""
+    ack()
+    texto = (
+        "*🤖 Comandos de Robotín — Guía rápida*\n\n"
+        "*Registrar cobros y contactos (con aprobación):*\n"
+        "• `/cobro` — Registrar un cobro\n"
+        "• `/domiciliar` — Registrar una domiciliación\n"
+        "• `/cobro-callcenter` — Cobro de Call Center Seguros\n"
+        "• `/conciliar` — Conciliar un pago\n"
+        "• `/liquidacion-nueva` — Registrar una liquidación nueva\n"
+        "• `/liquidacion-estatus` — Actualizar el estatus de una liquidación\n"
+        "• `/cobro-comercial` — Cobro del equipo Comercial\n"
+        "• `/contacto-legal` — Contacto del equipo Legal\n\n"
+        "*Registrar sin aprobación:*\n"
+        "• `/contactar` — Registrar un contacto con el cliente\n"
+        "• `/clientes-escalados` — Ver clientes escalados a Legal\n\n"
+        "*Consultar información:*\n"
+        "• `/buscar-cliente [cédula]` — Buscar el historial de un cliente\n"
+        "• `/mis-promesas` — Ver tus promesas de pago pendientes, con botones para marcarlas\n\n"
+        "*Promesas de pago:*\n"
+        "• `/promesa-cumplida` — Marcar una promesa como cumplida\n"
+        "• `/promesa-fallida` — Marcar una promesa como fallida\n\n"
+        "*Tasa del día:*\n"
+        "• `/tasa-hoy [valor]` — Fijar la tasa de cambio de hoy (ej: `/tasa-hoy 761.50`)\n\n"
+        "*Mercadeo:*\n"
+        "• `/merca-reporte` — Reportar conciliación de pago, incidencia técnica o problema de acceso\n"
+        "• `/incidencia-fullcode` — Reportar una incidencia técnica con código completo\n\n"
+        "*Utilidad:*\n"
+        "• `/listar-ids` — Ver los IDs de canales y usuarios de Slack\n"
+        "• `/probar-radar` — Probar manualmente el Radar de Promesas (4 PM)\n"
+        "• `/probar-cierre` — Probar manualmente el Cierre Diario (6 PM)\n"
+        "• `/ayuda` — Ver esta lista de comandos\n\n"
+        "_¿Algo no funciona como esperabas? Avísale a Antonio._"
+    )
+    respond(text=texto)
+# ============ FIN /ayuda ============
+
+
 if __name__ == "__main__":
     print("🤖 Robotín está despierto y conectándose a Slack...")
     _avisar_arranque()
