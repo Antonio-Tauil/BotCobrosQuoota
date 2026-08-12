@@ -6,7 +6,7 @@ cualquier ficha y armar el modal, validar, guardar y publicar — sin repetir c�
 """
 from datetime import datetime
 from zoneinfo import ZoneInfo
-from validaciones import _validar_view, _registro_ya_guardado, _guardar_fila_por_encabezado, _id_amigable, _ya_procesado
+from validaciones import _validar_view, _registro_ya_guardado, _guardar_fila_por_encabezado, _id_amigable, _ya_procesado, _reservar_mensaje
 
 FORM_SPECS = {}
 
@@ -176,6 +176,8 @@ def _aprobar_generico(nombre_spec, body, client):
     texto_original = body["message"]["blocks"][0]["text"]["text"]
     if _ya_procesado(texto_original):
         return
+    if not _reservar_mensaje(body["message"]["ts"]):
+        return  # alguien más ya está procesando este mismo clic (doble clic o dos personas a la vez)
     fecha_revision = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y")
     meta = dict(body["message"].get("metadata", {}).get("event_payload", {}))
     fecha_original = meta.pop("_fecha", fecha_revision)
@@ -202,6 +204,8 @@ def _rechazar_generico(nombre_spec, body, client):
     texto_original = body["message"]["blocks"][0]["text"]["text"]
     if _ya_procesado(texto_original):
         return
+    if not _reservar_mensaje(body["message"]["ts"]):
+        return  # alguien más ya está procesando este mismo clic (doble clic o dos personas a la vez)
     fecha_revision = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y")
     client.chat_update(
         channel=body["channel"]["id"], ts=body["message"]["ts"], text=f"{spec['titulo_mensaje']} RECHAZADO",
