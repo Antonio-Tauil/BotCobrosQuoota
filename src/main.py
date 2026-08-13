@@ -13,7 +13,7 @@ import motor_formularios  # noqa: F401  (motor genérico, sin comandos propios)
 import cobros             # noqa: F401  (registra /cobro, /domiciliar, /conciliar, etc.)
 import mercadeo           # noqa: F401  (registra /merca-reporte)
 import promesas           # noqa: F401  (registra /mis-promesas, /promesa-cumplida, etc.)
-import reportes           # noqa: F401  (registra /probar-reporte-semanal)
+import reportes           # noqa: F401  (registra /probar-reporte-semanal y /probar-reporte-mensual)
 from scheduler import iniciar_scheduler
 
 
@@ -83,6 +83,8 @@ def _mostrar_ayuda(ack, respond):
         "• `/listar-ids` — Ver los IDs de canales y usuarios de Slack\n"
         "• `/probar-radar` — Probar manualmente el Radar de Promesas (4 PM)\n"
         "• `/probar-cierre` — Probar manualmente el Cierre Diario (6 PM)\n"
+        "• `/probar-reporte-semanal` — Probar manualmente los reportes semanales\n"
+        "• `/probar-reporte-mensual` — Probar manualmente los reportes mensuales\n"
         "• `/ayuda` — Ver esta lista de comandos\n\n"
         "_¿Algo no funciona como esperabas? Avísale a Antonio._"
     )
