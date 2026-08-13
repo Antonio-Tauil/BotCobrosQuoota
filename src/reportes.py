@@ -24,7 +24,7 @@ from datetime import datetime, date, timedelta
 from zoneinfo import ZoneInfo
 from google.oauth2.service_account import Credentials
 
-from config import app, SHEET_ID_MERCADEO, CANAL_CIERRE, CANAL_MERCADEO_PAGOS
+from config import app, SHEET_ID_MERCADEO, CANAL_CIERRE, CANAL_MERCADEO_PAGOS, CANAL_REPORTES_MENSUALES
 from validaciones import parse_numero, _columna_por_nombre
 from motor_formularios import FORM_SPECS
 from cobros import _abrir_hoja_domiciliacion, _abrir_hoja_cobro2, _abrir_hoja_conciliacion, _abrir_hoja_comercial
@@ -237,3 +237,131 @@ def probar_reporte_semanal(ack, body, client):
     )
     generar_reportes_semanales()
 # ============ FIN REPORTE SEMANAL DE PAGOS ============
+
+
+# ============ REPORTE MENSUAL DE PAGOS (día 1 de cada mes, para gerencia) ============
+# Junta los 5 reportes en UN SOLO canal (CANAL_REPORTES_MENSUALES), con la comparación
+# contra el mes anterior — a diferencia del semanal, que va cada uno a su propio canal.
+
+def _calcular_area_cobranzas(inicio, fin):
+    r_cobro = _sumar_area(_abrir_hoja_pagos_recibidos(), "Fecha", "MontoBs", "MontoUsd",
+                           "Cobrador", inicio, fin)
+    r_domic = _sumar_area(_abrir_hoja_domiciliacion(), "Fecha", "Monto recuperado Bs", "MontoUsd",
+                           "Cobrador", inicio, fin)
+    return _combinar_resumenes(r_cobro, r_domic)
+
+
+def _calcular_area_callcenter(inicio, fin):
+    return _sumar_area(_abrir_hoja_cobro2(), "Fecha", "MontoBs", "MontoUsd", None, inicio, fin)
+
+
+def _calcular_area_comercial(inicio, fin):
+    return _sumar_area(_abrir_hoja_comercial(), "Fecha", "MontoBs", "MontoUsd", None, inicio, fin)
+
+
+def _calcular_area_conciliacion(inicio, fin):
+    return _sumar_area(_abrir_hoja_conciliacion(), "Fecha conciliación", "Monto reportado",
+                        None, "Conciliador", inicio, fin)
+
+
+def _calcular_area_mercadeo(inicio, fin):
+    return _sumar_area(_abrir_hoja_mercadeo("Conciliacion"), "Fecha de Reporte", "Monto en Bs",
+                        "Monto en USD", None, inicio, fin)
+
+
+def _primer_dia_mes(fecha):
+    return fecha.replace(day=1)
+
+
+def _ultimo_dia_mes_anterior(fecha):
+    return _primer_dia_mes(fecha) - timedelta(days=1)
+
+
+def _rango_mes_pasado():
+    """El mes calendario que acaba de terminar (ej. si hoy es 01/09, devuelve todo agosto).
+    Sin importar qué día se llame esta función — así /probar-reporte-mensual siempre da
+    el último mes cerrado."""
+    hoy = datetime.now(ZoneInfo("America/Caracas")).date()
+    fin_mes_pasado = _ultimo_dia_mes_anterior(hoy)
+    inicio_mes_pasado = _primer_dia_mes(fin_mes_pasado)
+    return inicio_mes_pasado, fin_mes_pasado
+
+
+def _rango_mes_anterior_a(inicio_de_un_mes):
+    """Dado el primer día de un mes, devuelve (inicio, fin) del mes ANTERIOR a ese — para
+    poder comparar 'este mes' contra 'el mes pasado de ese'."""
+    fin_mes_anterior = inicio_de_un_mes - timedelta(days=1)
+    inicio_mes_anterior = _primer_dia_mes(fin_mes_anterior)
+    return inicio_mes_anterior, fin_mes_anterior
+
+
+def _formatear_reporte_mensual(titulo, emoji, resumen, resumen_anterior, inicio, fin, mostrar_usd=True):
+    lineas = [
+        f"{emoji} *Reporte mensual — {titulo}*",
+        f"Mes: {inicio.strftime('%m/%Y')} ({inicio.strftime('%d/%m')} al {fin.strftime('%d/%m/%Y')})",
+        "",
+    ]
+    if resumen["conteo"] == 0:
+        lineas.append("No hubo registros este mes.")
+        return "\n".join(lineas)
+    if mostrar_usd:
+        lineas.append(f"💰 *Total:* Bs. {resumen['total_bs']:,.2f}  ·  ${resumen['total_usd']:,.2f}")
+    else:
+        lineas.append(f"💰 *Total:* Bs. {resumen['total_bs']:,.2f}")
+    lineas.append(f"📝 *Casos:* {resumen['conteo']}")
+    if resumen_anterior and resumen_anterior["total_bs"] > 0:
+        cambio = ((resumen["total_bs"] - resumen_anterior["total_bs"]) / resumen_anterior["total_bs"]) * 100
+        flecha = "📈" if cambio >= 0 else "📉"
+        lineas.append(f"{flecha} *Vs. mes anterior:* {cambio:+.1f}% en Bs")
+    else:
+        lineas.append("📈 *Vs. mes anterior:* sin datos del mes anterior para comparar")
+    if resumen["por_persona"]:
+        lineas.append("")
+        lineas.append("*Por persona (top 5):*")
+        top5 = sorted(resumen["por_persona"].keys(), key=lambda p: resumen["por_persona"][p], reverse=True)[:5]
+        for persona in top5:
+            lineas.append(f"   • {persona.title()} — Bs. {resumen['por_persona'][persona]:,.2f}")
+    return "\n".join(lineas)
+
+
+def generar_reportes_mensuales():
+    """Se ejecuta el día 1 de cada mes en la mañana: arma el resumen del mes que acaba de
+    terminar para cada área, lo compara contra el mes anterior a ese, y publica los 5
+    juntos en CANAL_REPORTES_MENSUALES (para que gerencia los vea todos en un solo lugar).
+    Cada área se procesa por separado para que un problema en una no impida las demás."""
+    inicio_mes, fin_mes = _rango_mes_pasado()
+    inicio_mes_ant, fin_mes_ant = _rango_mes_anterior_a(inicio_mes)
+
+    areas = [
+        ("Cobranzas", "📊", _calcular_area_cobranzas, True),
+        ("Call Center", "📞", _calcular_area_callcenter, True),
+        ("Comercial", "🤝", _calcular_area_comercial, True),
+        ("Conciliación de Cobranzas", "🧾", _calcular_area_conciliacion, False),
+        ("Mercadeo (Pagos)", "🛒", _calcular_area_mercadeo, True),
+    ]
+
+    for titulo, emoji, calcular, mostrar_usd in areas:
+        try:
+            resumen_actual = calcular(inicio_mes, fin_mes)
+            resumen_anterior = calcular(inicio_mes_ant, fin_mes_ant)
+            app.client.chat_postMessage(
+                channel=CANAL_REPORTES_MENSUALES,
+                text=_formatear_reporte_mensual(titulo, emoji, resumen_actual, resumen_anterior,
+                                                 inicio_mes, fin_mes, mostrar_usd=mostrar_usd)
+            )
+        except Exception as e:
+            print(f"❌ Reporte mensual [{titulo}]: error: {type(e).__name__}: {e}")
+
+    print("✅ Reportes mensuales generados.")
+
+
+# Comando manual para probar el reporte mensual sin esperar al día 1
+@app.command("/probar-reporte-mensual")
+def probar_reporte_mensual(ack, body, client):
+    ack()
+    client.chat_postEphemeral(
+        channel=body["channel_id"], user=body["user_id"],
+        text="⏳ Generando los reportes mensuales ahora mismo... revisa el canal de reportes mensuales."
+    )
+    generar_reportes_mensuales()
+# ============ FIN REPORTE MENSUAL DE PAGOS ============
