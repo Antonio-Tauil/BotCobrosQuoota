@@ -6,7 +6,10 @@ cualquier ficha y armar el modal, validar, guardar y publicar — sin repetir c�
 """
 from datetime import datetime
 from zoneinfo import ZoneInfo
-from validaciones import _validar_view, _registro_ya_guardado, _guardar_fila_por_encabezado, _id_amigable, _ya_procesado, _reservar_mensaje
+from validaciones import (
+    _validar_view, _registro_ya_guardado, _guardar_fila_por_encabezado, _id_amigable,
+    _ya_procesado, _reservar_mensaje, _buscar_duplicado_reciente,
+)
 
 FORM_SPECS = {}
 
@@ -151,6 +154,45 @@ def _publicar_para_aprobacion(nombre_spec, body, client):
     # p.ej. "domiciliar" usa botones "aprobar_domiciliacion"). "accion_id" en la ficha
     # permite fijar ese sufijo; si no está, se usa el nombre de la ficha tal cual.
     sufijo_accion = spec.get("accion_id", nombre_spec)
+
+    # ============ AVISO DE POSIBLE DUPLICADO (mismo cliente, misma semana) ============
+    # Si la ficha pide "verificar_duplicado", revisa si ya hay un registro reciente del
+    # mismo cliente (por cédula, o por empresa en /domiciliar) ANTES de publicar. Si lo hay,
+    # se agrega un aviso al mensaje y el botón Aprobar pide una confirmación extra (ventana
+    # emergente nativa de Slack) — no bloquea el guardado, solo obliga a confirmar a
+    # propósito. Importante: el aviso usa el emoji 🔁 (no ✅/❌/⚠), porque _ya_procesado()
+    # usa esos tres para saber si un mensaje ya fue aprobado/rechazado — si el aviso
+    # empezara con ⚠, el mensaje se vería como "ya procesado" y nadie podría aprobarlo.
+    confirmar_aprobar = None
+    dup_spec = spec.get("verificar_duplicado")
+    if dup_spec:
+        valor_identificador = datos_campos.get(dup_spec["campo"], "")
+        try:
+            sheet_dup = spec["abrir_hoja"]()
+        except Exception as e:
+            sheet_dup = None
+            print(f"⚠️ [{nombre_spec}] No se pudo abrir la hoja para revisar duplicado: {e}")
+        fecha_duplicado = _buscar_duplicado_reciente(
+            sheet_dup, dup_spec["columna"], dup_spec["columna_fecha"],
+            valor_identificador, dup_spec.get("modo", "cedula")
+        )
+        if fecha_duplicado:
+            texto = (f"🔁 *POSIBLE DUPLICADO* — ya hay un registro con esta/e {dup_spec['etiqueta']} "
+                     f"esta semana (fecha: {fecha_duplicado}).\n\n" + texto)
+            confirmar_aprobar = {
+                "title": {"type": "plain_text", "text": "Confirmar posible duplicado"},
+                "text": {"type": "mrkdwn", "text": (
+                    f"Ya hay otro registro con esta/e {dup_spec['etiqueta']} esta semana "
+                    f"(fecha: {fecha_duplicado}). ¿Aprobar de todas formas?")},
+                "confirm": {"type": "plain_text", "text": "Sí, aprobar de todas formas"},
+                "deny": {"type": "plain_text", "text": "Cancelar"},
+            }
+    # ============ FIN AVISO DE POSIBLE DUPLICADO ============
+
+    boton_aprobar = {"type": "button", "text": {"type": "plain_text", "text": "✅ Aprobar"}, "style": "primary",
+                     "action_id": f"aprobar_{sufijo_accion}"}
+    if confirmar_aprobar:
+        boton_aprobar["confirm"] = confirmar_aprobar
     try:
         client.chat_postMessage(
             channel=spec["canal"], text=spec["titulo_mensaje"],
@@ -158,8 +200,7 @@ def _publicar_para_aprobacion(nombre_spec, body, client):
             blocks=[
                 {"type": "section", "text": {"type": "mrkdwn", "text": texto}},
                 {"type": "actions", "elements": [
-                    {"type": "button", "text": {"type": "plain_text", "text": "✅ Aprobar"}, "style": "primary",
-                     "action_id": f"aprobar_{sufijo_accion}"},
+                    boton_aprobar,
                     {"type": "button", "text": {"type": "plain_text", "text": "❌ Rechazar"}, "style": "danger",
                      "action_id": f"rechazar_{sufijo_accion}"},
                 ]}
