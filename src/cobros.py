@@ -18,7 +18,7 @@ from config import (
 from validaciones import (
     _normalizar_encabezado, _guardar_fila_por_encabezado, _columna_por_nombre,
     _registro_ya_guardado, _id_amigable, _ya_procesado, _solo_digitos, _quitar_acentos,
-    parse_numero, _es_fecha_valida, _reservar_mensaje,
+    parse_numero, _es_fecha_valida, _reservar_mensaje, _buscar_duplicado_reciente,
 )
 from motor_formularios import (
     FORM_SPECS, _construir_blocks_formulario, _abrir_formulario_generico,
@@ -95,16 +95,20 @@ def recibir_contacto(ack, body, client):
 
 
 # ============ COMANDO /cobro ============
+def _abrir_hoja_pagos_recibidos_cobro():
+    creds_json = json.loads(os.environ["GOOGLE_CREDENTIALS"])
+    creds_json["private_key"] = creds_json["private_key"].replace("\\n", "\n")
+    creds = Credentials.from_service_account_info(
+        creds_json,
+        scopes=["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+    )
+    cliente = gspread.authorize(creds)
+    return cliente.open_by_key(os.environ["SHEET_ID"]).worksheet("Pagos Recibidos")
+
+
 def guardar_en_sheet(fecha, cobrador, descripcion, numero, cedula, monto_bs, forma_pago, banco, tasa_bcv, monto_usd, registro_id=""):
     try:
-        creds_json = json.loads(os.environ["GOOGLE_CREDENTIALS"])
-        creds_json["private_key"] = creds_json["private_key"].replace("\\n", "\n")
-        creds = Credentials.from_service_account_info(
-            creds_json,
-            scopes=["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-        )
-        cliente = gspread.authorize(creds)
-        sheet = cliente.open_by_key(os.environ["SHEET_ID"]).worksheet("Pagos Recibidos")
+        sheet = _abrir_hoja_pagos_recibidos_cobro()
         if _registro_ya_guardado(sheet, registro_id):
             print("⚠️ Cobro duplicado (ya guardado), se omite.")
             return "DUPLICADO"
@@ -234,6 +238,31 @@ def recibir_cobro(ack, body, client):
         f"*Tasa BCV:* {tasa_bcv_str}\n"
         f"*Monto USD:* {monto_usd_str}"
     )
+
+    # ============ AVISO DE POSIBLE DUPLICADO (mismo cliente, misma semana) ============
+    # Igual que en el resto de los comandos de cobro (motor_formularios.py): usa 🔁, no ⚠,
+    # para no confundir a _ya_procesado() (que usa ✅/❌/⚠ para saber si un mensaje ya fue
+    # aprobado o rechazado).
+    boton_aprobar = {"type": "button", "text": {"type": "plain_text", "text": "✅ Aprobar"}, "style": "primary", "action_id": "aprobar"}
+    try:
+        sheet_dup = _abrir_hoja_pagos_recibidos_cobro()
+    except Exception as e:
+        sheet_dup = None
+        print(f"⚠️ [cobro] No se pudo abrir la hoja para revisar duplicado: {e}")
+    fecha_duplicado = _buscar_duplicado_reciente(sheet_dup, "Cedula", "Fecha", cedula, "cedula")
+    if fecha_duplicado:
+        texto = (f"🔁 *POSIBLE DUPLICADO* — ya hay un registro con esta cédula esta semana "
+                 f"(fecha: {fecha_duplicado}).\n\n" + texto)
+        boton_aprobar["confirm"] = {
+            "title": {"type": "plain_text", "text": "Confirmar posible duplicado"},
+            "text": {"type": "mrkdwn", "text": (
+                f"Ya hay otro registro con esta cédula esta semana (fecha: {fecha_duplicado}). "
+                f"¿Aprobar de todas formas?")},
+            "confirm": {"type": "plain_text", "text": "Sí, aprobar de todas formas"},
+            "deny": {"type": "plain_text", "text": "Cancelar"},
+        }
+    # ============ FIN AVISO DE POSIBLE DUPLICADO ============
+
     client.chat_postMessage(
         channel="#cobranzas-log",
         text="Nuevo cobro reportado",
@@ -244,7 +273,7 @@ def recibir_cobro(ack, body, client):
         blocks=[
             {"type": "section", "text": {"type": "mrkdwn", "text": texto}},
             {"type": "actions", "elements": [
-                {"type": "button", "text": {"type": "plain_text", "text": "✅ Aprobar"}, "style": "primary", "action_id": "aprobar"},
+                boton_aprobar,
                 {"type": "button", "text": {"type": "plain_text", "text": "❌ Rechazar"}, "style": "danger", "action_id": "rechazar"}
             ]}
         ]
@@ -369,6 +398,10 @@ FORM_SPECS["domiciliar"] = {
     "anti_duplicado": True,
     "prefijo_id": "DOMIC",
     "accion_id": "domiciliacion",
+    "verificar_duplicado": {
+        "campo": "empresa", "columna": "Empresa", "columna_fecha": "Fecha",
+        "modo": "texto", "etiqueta": "empresa",
+    },
     "canal": "#cobranzas-domiciliacion",
     "titulo_mensaje": "Nueva domiciliación reportada",
     "emoji_mensaje": "🏦",
@@ -477,6 +510,10 @@ FORM_SPECS["cobro_callcenter"] = {
     "anti_duplicado": True,
     "prefijo_id": "CALLCENTER",
     "accion_id": "cobro2",
+    "verificar_duplicado": {
+        "campo": "cedula", "columna": "Cedula", "columna_fecha": "Fecha",
+        "modo": "cedula", "etiqueta": "cédula",
+    },
     "canal": "C0BAS4M970S",
     "titulo_mensaje": "Nuevo cobro reportado (Call Center)",
     "emoji_mensaje": "📞💰",
@@ -603,6 +640,10 @@ FORM_SPECS["conciliar"] = {
     "anti_duplicado": True,
     "prefijo_id": "CONC",
     "accion_id": "conciliacion",
+    "verificar_duplicado": {
+        "campo": "cedula", "columna": "Cédula", "columna_fecha": "Fecha conciliación",
+        "modo": "cedula", "etiqueta": "cédula",
+    },
     "canal": "#cobranzas-conciliar",
     "titulo_mensaje": "Nueva conciliación reportada",
     "emoji_mensaje": "🧾",
@@ -891,6 +932,10 @@ FORM_SPECS["cobro_comercial"] = {
     "anti_duplicado": True,
     "prefijo_id": "COMERCIAL",
     "accion_id": "comercial",
+    "verificar_duplicado": {
+        "campo": "cedula", "columna": "Cedula", "columna_fecha": "Fecha",
+        "modo": "cedula", "etiqueta": "cédula",
+    },
     "canal": CANAL_COMERCIAL,
     "titulo_mensaje": "Nuevo cobro reportado (Comercial)",
     "emoji_mensaje": "🤝💰",
