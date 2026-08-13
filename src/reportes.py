@@ -19,6 +19,7 @@ Incidencias Técnicas de Mercadeo.
 import os
 import re
 import json
+import time
 import gspread
 from datetime import datetime, date, timedelta
 from zoneinfo import ZoneInfo
@@ -77,23 +78,51 @@ def _parse_monto_seguro(texto):
         return 0.0
 
 
+def _es_error_de_cuota(e):
+    """True si el error es un '429 Quota exceeded' de Google Sheets (demasiadas consultas
+    por minuto) — ese caso sí vale la pena reintentar un poco después. Cualquier otro tipo
+    de error (credenciales, hoja no encontrada, etc.) no se reintenta, porque esperar no
+    lo va a arreglar."""
+    texto = str(e)
+    return "429" in texto or "Quota exceeded" in texto or "RESOURCE_EXHAUSTED" in texto
+
+
+def _con_reintento(func, intentos=3, espera_inicial=5):
+    """Ejecuta 'func' (sin argumentos). Si Google Sheets responde '429 Quota exceeded'
+    (se hicieron demasiadas consultas seguidas), espera un poco y lo intenta de nuevo,
+    esperando cada vez más (5s, luego 15s) antes de rendirse. Esto evita que una ráfaga
+    de lecturas (como generar varios reportes seguidos) pierda datos por las puras."""
+    espera = espera_inicial
+    for intento in range(intentos):
+        try:
+            return func()
+        except Exception as e:
+            if not _es_error_de_cuota(e) or intento == intentos - 1:
+                raise
+            print(f"⚠️ Reportes: Google Sheets pidió esperar (cuota excedida), "
+                  f"reintentando en {espera}s (intento {intento + 1}/{intentos})...")
+            time.sleep(espera)
+            espera *= 3
+
+
 def _sumar_area(ws, col_fecha, col_monto_bs, col_monto_usd, col_persona, lunes, domingo):
     """Lee 'ws' y suma lo registrado entre 'lunes' y 'domingo' (ambos incluidos): total en
     Bs, total en USD (si se pasó esa columna), cantidad de casos, y un desglose por persona
     (si se pasó esa columna). Si no encuentra alguna columna esperada, avisa por consola y
-    sigue con lo que sí pudo leer — nunca detiene el resto del reporte."""
+    sigue con lo que sí pudo leer — nunca detiene el resto del reporte. Las consultas a
+    Google Sheets pasan por _con_reintento, por si Google pide esperar por cuota."""
     resumen = {"conteo": 0, "total_bs": 0.0, "total_usd": 0.0, "por_persona": {}}
     if ws is None:
         return resumen
     try:
-        idx_fecha = _columna_por_nombre(ws, col_fecha)
-        idx_bs = _columna_por_nombre(ws, col_monto_bs) if col_monto_bs else None
-        idx_usd = _columna_por_nombre(ws, col_monto_usd) if col_monto_usd else None
-        idx_persona = _columna_por_nombre(ws, col_persona) if col_persona else None
+        idx_fecha = _con_reintento(lambda: _columna_por_nombre(ws, col_fecha))
+        idx_bs = _con_reintento(lambda: _columna_por_nombre(ws, col_monto_bs)) if col_monto_bs else None
+        idx_usd = _con_reintento(lambda: _columna_por_nombre(ws, col_monto_usd)) if col_monto_usd else None
+        idx_persona = _con_reintento(lambda: _columna_por_nombre(ws, col_persona)) if col_persona else None
         if idx_fecha is None:
             print(f"⚠️ Reporte semanal: no se encontró la columna de fecha '{col_fecha}' en '{ws.title}'.")
             return resumen
-        valores = ws.get_all_values()
+        valores = _con_reintento(lambda: ws.get_all_values())
     except Exception as e:
         print(f"⚠️ Reporte semanal: error abriendo '{getattr(ws, 'title', '?')}': {type(e).__name__}: {e}")
         return resumen
@@ -171,9 +200,9 @@ def generar_reportes_semanales():
     lunes_pasado, domingo_pasado = _rango_semana_pasada()
 
     try:
-        r_cobro = _sumar_area(_abrir_hoja_pagos_recibidos(), "Fecha", "MontoBs", "MontoUsd",
+        r_cobro = _sumar_area(_con_reintento(_abrir_hoja_pagos_recibidos), "Fecha", "MontoBs", "MontoUsd",
                                "Cobrador", lunes_pasado, domingo_pasado)
-        r_domic = _sumar_area(_abrir_hoja_domiciliacion(), "Fecha", "Monto recuperado Bs", "MontoUsd",
+        r_domic = _sumar_area(_con_reintento(_abrir_hoja_domiciliacion), "Fecha", "Monto recuperado Bs", "MontoUsd",
                                "Cobrador", lunes_pasado, domingo_pasado)
         r_cobranzas = _combinar_resumenes(r_cobro, r_domic)
         app.client.chat_postMessage(
@@ -184,7 +213,7 @@ def generar_reportes_semanales():
         print(f"❌ Reporte semanal [Cobranzas]: error: {type(e).__name__}: {e}")
 
     try:
-        r_cc = _sumar_area(_abrir_hoja_cobro2(), "Fecha", "MontoBs", "MontoUsd",
+        r_cc = _sumar_area(_con_reintento(_abrir_hoja_cobro2), "Fecha", "MontoBs", "MontoUsd",
                             None, lunes_pasado, domingo_pasado)
         app.client.chat_postMessage(
             channel=FORM_SPECS["cobro_callcenter"]["canal"],
@@ -194,7 +223,7 @@ def generar_reportes_semanales():
         print(f"❌ Reporte semanal [Call Center]: error: {type(e).__name__}: {e}")
 
     try:
-        r_com = _sumar_area(_abrir_hoja_comercial(), "Fecha", "MontoBs", "MontoUsd",
+        r_com = _sumar_area(_con_reintento(_abrir_hoja_comercial), "Fecha", "MontoBs", "MontoUsd",
                              None, lunes_pasado, domingo_pasado)
         app.client.chat_postMessage(
             channel=FORM_SPECS["cobro_comercial"]["canal"],
@@ -204,7 +233,7 @@ def generar_reportes_semanales():
         print(f"❌ Reporte semanal [Comercial]: error: {type(e).__name__}: {e}")
 
     try:
-        r_conc = _sumar_area(_abrir_hoja_conciliacion(), "Fecha conciliación", "Monto reportado",
+        r_conc = _sumar_area(_con_reintento(_abrir_hoja_conciliacion), "Fecha conciliación", "Monto reportado",
                               None, "Conciliador", lunes_pasado, domingo_pasado)
         app.client.chat_postMessage(
             channel=FORM_SPECS["conciliar"]["canal"],
@@ -215,8 +244,8 @@ def generar_reportes_semanales():
         print(f"❌ Reporte semanal [Conciliación]: error: {type(e).__name__}: {e}")
 
     try:
-        r_merc = _sumar_area(_abrir_hoja_mercadeo("Conciliacion"), "Fecha de Reporte", "Monto en Bs",
-                              "Monto en USD", None, lunes_pasado, domingo_pasado)
+        r_merc = _sumar_area(_con_reintento(lambda: _abrir_hoja_mercadeo("Conciliacion")), "Fecha de Reporte",
+                              "Monto en Bs", "Monto en USD", None, lunes_pasado, domingo_pasado)
         app.client.chat_postMessage(
             channel=CANAL_MERCADEO_PAGOS,
             text=_formatear_reporte("Mercadeo (Pagos)", "🛒", r_merc, lunes_pasado, domingo_pasado)
@@ -244,29 +273,29 @@ def probar_reporte_semanal(ack, body, client):
 # contra el mes anterior — a diferencia del semanal, que va cada uno a su propio canal.
 
 def _calcular_area_cobranzas(inicio, fin):
-    r_cobro = _sumar_area(_abrir_hoja_pagos_recibidos(), "Fecha", "MontoBs", "MontoUsd",
+    r_cobro = _sumar_area(_con_reintento(_abrir_hoja_pagos_recibidos), "Fecha", "MontoBs", "MontoUsd",
                            "Cobrador", inicio, fin)
-    r_domic = _sumar_area(_abrir_hoja_domiciliacion(), "Fecha", "Monto recuperado Bs", "MontoUsd",
+    r_domic = _sumar_area(_con_reintento(_abrir_hoja_domiciliacion), "Fecha", "Monto recuperado Bs", "MontoUsd",
                            "Cobrador", inicio, fin)
     return _combinar_resumenes(r_cobro, r_domic)
 
 
 def _calcular_area_callcenter(inicio, fin):
-    return _sumar_area(_abrir_hoja_cobro2(), "Fecha", "MontoBs", "MontoUsd", None, inicio, fin)
+    return _sumar_area(_con_reintento(_abrir_hoja_cobro2), "Fecha", "MontoBs", "MontoUsd", None, inicio, fin)
 
 
 def _calcular_area_comercial(inicio, fin):
-    return _sumar_area(_abrir_hoja_comercial(), "Fecha", "MontoBs", "MontoUsd", None, inicio, fin)
+    return _sumar_area(_con_reintento(_abrir_hoja_comercial), "Fecha", "MontoBs", "MontoUsd", None, inicio, fin)
 
 
 def _calcular_area_conciliacion(inicio, fin):
-    return _sumar_area(_abrir_hoja_conciliacion(), "Fecha conciliación", "Monto reportado",
+    return _sumar_area(_con_reintento(_abrir_hoja_conciliacion), "Fecha conciliación", "Monto reportado",
                         None, "Conciliador", inicio, fin)
 
 
 def _calcular_area_mercadeo(inicio, fin):
-    return _sumar_area(_abrir_hoja_mercadeo("Conciliacion"), "Fecha de Reporte", "Monto en Bs",
-                        "Monto en USD", None, inicio, fin)
+    return _sumar_area(_con_reintento(lambda: _abrir_hoja_mercadeo("Conciliacion")), "Fecha de Reporte",
+                        "Monto en Bs", "Monto en USD", None, inicio, fin)
 
 
 def _primer_dia_mes(fecha):
