@@ -31,6 +31,7 @@ CANAL_SEGUIMIENTO = "C0BJWPMA3NF"          # Radar de promesas (4 PM)
 CANAL_CIERRE = "#cobranzas-log"           # Cierre diario de cobros (6 PM)
 CANAL_MERCADEO_PAGOS = "C0BNMAXSLKW"
 CANAL_MERCADEO_INCIDENCIAS = "C0BN27H0N31"
+CANAL_REPORTES_MENSUALES = "C0BQY0CQ4GG"  # canal para gerencia: los 5 reportes mensuales juntos
 
 SUPERVISOR_ID = "U0B51AREWDU"  # Leandro Quoota (escalamiento del Radar de promesas)
 
