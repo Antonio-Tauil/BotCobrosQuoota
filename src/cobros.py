@@ -1138,8 +1138,28 @@ def recibir_cliente_escalado(ack, body, client):
 
 
 
+def _buscar_columnas_monto(encabezados):
+    """Ubica por NOMBRE las columnas de monto en Bs y en USD de una hoja (si existen),
+    tolerante a variaciones ('MontoBs', 'Monto en Bs', 'Monto reportado', 'MontoUsd',
+    'Monto en USD', etc. — 'encabezados' ya viene sin tildes y en minúsculas). Devuelve
+    (idx_bs, idx_usd) en índices 0-based; cualquiera de los dos puede ser None si esa
+    hoja no tiene esa columna (ej. Liquidaciones no maneja montos)."""
+    idx_bs, idx_usd = None, None
+    for idx, h in enumerate(encabezados):
+        if "monto" not in h:
+            continue
+        if "usd" in h or "dolar" in h:
+            if idx_usd is None:
+                idx_usd = idx
+        elif idx_bs is None:
+            idx_bs = idx
+    return idx_bs, idx_usd
+
+
 def _buscar_en_hoja(cliente, sheet_id, nombre_hoja, etiqueta, cedula_digitos):
-    """Devuelve lista de líneas (strings) con las coincidencias en una hoja."""
+    """Devuelve lista de líneas (strings) con las coincidencias en una hoja: fecha, nombre
+    y — si la hoja maneja montos — el monto en Bs/USD de ese registro, para ver de un
+    vistazo cuánto ha pagado el cliente sin tener que abrir el Sheet."""
     resultados = []
     try:
         spreadsheet = cliente.open_by_key(sheet_id)
@@ -1164,11 +1184,18 @@ def _buscar_en_hoja(cliente, sheet_id, nombre_hoja, etiqueta, cedula_digitos):
                 break
         if col_ced is None:
             return resultados  # esta hoja no tiene cédula (ej. Domiciliación)
+        idx_bs, idx_usd = _buscar_columnas_monto(encabezados)
         for fila in valores[1:]:
             if len(fila) > col_ced and _solo_digitos(fila[col_ced]) == cedula_digitos and cedula_digitos:
                 fecha = fila[0] if len(fila) > 0 else ""
                 nombre = fila[1] if len(fila) > 1 else ""
-                resultados.append(f"   • {fecha} — {nombre}")
+                montos = []
+                if idx_bs is not None and len(fila) > idx_bs and fila[idx_bs].strip():
+                    montos.append(fila[idx_bs].strip())
+                if idx_usd is not None and len(fila) > idx_usd and fila[idx_usd].strip():
+                    montos.append(fila[idx_usd].strip())
+                texto_monto = f" — {' / '.join(montos)}" if montos else ""
+                resultados.append(f"   • {fecha} — {nombre}{texto_monto}")
     except Exception as e:
         print(f"⚠️ Error buscando en '{etiqueta}': {type(e).__name__}: {e}")
     return resultados
