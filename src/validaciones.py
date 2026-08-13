@@ -6,7 +6,7 @@ evitar guardar el mismo registro dos veces, guardar/leer en el Sheet por NOMBRE 
 import re
 import unicodedata
 import threading
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 from zoneinfo import ZoneInfo
 
 def parse_numero(texto):
@@ -98,6 +98,76 @@ def _reservar_mensaje(ts):
         _MENSAJES_EN_PROCESO.add(ts)
         return True
 # ============ FIN BLINDAJE ANTI-DUPLICADOS ============
+
+
+# ============ AVISO DE POSIBLE DUPLICADO (mismo cliente, misma semana) ============
+# Antes de aprobar un cobro/domiciliación/etc., revisa si YA existe un registro de ese mismo
+# cliente (por cédula, o por empresa en /domiciliar) con fecha dentro de la semana en curso.
+# No bloquea el guardado — solo agrega un aviso al mensaje de aprobación y pide una
+# confirmación extra (ventana emergente de Slack) antes de dejar aprobar, para que quien
+# aprueba decida si es un cobro repetido de verdad o si son dos pagos distintos válidos.
+
+def _normalizar_para_comparar(texto, modo="texto"):
+    """Deja un valor listo para comparar si es 'el mismo cliente': para cédulas compara
+    solo los dígitos (para que V-12.345.678, 12345678 y 12.345.678 se reconozcan igual);
+    para texto (ej. nombre de empresa) compara sin tildes, en minúsculas y sin espacios de más."""
+    if modo == "cedula":
+        return _solo_digitos(texto)
+    return _quitar_acentos(str(texto or "").strip().lower()).strip()
+
+
+def _parsear_fecha_ddmmyyyy(texto):
+    """Convierte 'DD/MM/AAAA' (o con '-') a un date de Python. Devuelve None si no se puede."""
+    t = str(texto or "").strip()
+    partes = re.split(r"[/\-]", t)
+    if len(partes) != 3:
+        return None
+    try:
+        d, m, y = int(partes[0]), int(partes[1]), int(partes[2])
+        if y < 100:
+            y += 2000
+        return date(y, m, d)
+    except ValueError:
+        return None
+
+
+def _inicio_semana_actual():
+    """Lunes de la semana en curso (hora Venezuela), a medianoche."""
+    hoy = datetime.now(ZoneInfo("America/Caracas")).date()
+    return hoy - timedelta(days=hoy.weekday())
+
+
+def _buscar_duplicado_reciente(sheet, columna_valor, columna_fecha, valor, modo="cedula"):
+    """Revisa si YA existe una fila en 'sheet' con el mismo 'valor' (misma cédula o misma
+    empresa, según 'modo') y fecha dentro de la semana en curso (lunes a hoy). Devuelve la
+    fecha (texto, tal como está en el Sheet) del registro encontrado, o None si no hay
+    ninguno o no se pudo revisar (nunca lanza error — si algo falla, simplemente no avisa)."""
+    if not valor or sheet is None:
+        return None
+    try:
+        col_valor = _columna_por_nombre(sheet, columna_valor)
+        col_fecha = _columna_por_nombre(sheet, columna_fecha)
+        if col_valor is None or col_fecha is None:
+            return None
+        objetivo = _normalizar_para_comparar(valor, modo)
+        if not objetivo:
+            return None
+        lunes = _inicio_semana_actual()
+        valores = sheet.get_all_values()
+        idx_valor, idx_fecha = col_valor - 1, col_fecha - 1
+        for fila in valores[1:]:
+            if len(fila) <= max(idx_valor, idx_fecha):
+                continue
+            if _normalizar_para_comparar(fila[idx_valor], modo) != objetivo:
+                continue
+            fecha_fila = _parsear_fecha_ddmmyyyy(fila[idx_fecha])
+            if fecha_fila and fecha_fila >= lunes:
+                return fila[idx_fecha].strip()
+        return None
+    except Exception as e:
+        print(f"⚠️ No se pudo revisar duplicado reciente: {e}")
+        return None
+# ============ FIN AVISO DE POSIBLE DUPLICADO ============
 
 
 # ============ GUARDAR EN SHEETS POR NOMBRE DE COLUMNA (Fase 2 - Sostenibilidad) ============
