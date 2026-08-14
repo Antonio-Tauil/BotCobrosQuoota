@@ -113,6 +113,8 @@ _BANCOS_MERCADEO = [
     {"text": {"type": "plain_text", "text": "Provincial"}, "value": "Provincial"},
     {"text": {"type": "plain_text", "text": "Bicentenario"}, "value": "Bicentenario"},
     {"text": {"type": "plain_text", "text": "Banesco"}, "value": "Banesco"},
+    {"text": {"type": "plain_text", "text": "Banco Exterior"}, "value": "Banco Exterior"},
+    {"text": {"type": "plain_text", "text": "Banco Plaza"}, "value": "Banco Plaza"},
     {"text": {"type": "plain_text", "text": "Banco Digital de los Trabajadores"}, "value": "Banco Digital de los Trabajadores"},
     {"text": {"type": "plain_text", "text": "Banco de Destino"}, "value": "Banco de Destino"},
     {"text": {"type": "plain_text", "text": "Otro"}, "value": "Otro"}
