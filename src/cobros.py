@@ -46,6 +46,30 @@ def _abrir_hoja_contactados():
 
 
 
+# ============ MENSAJE REDISEÑADO (mismo estilo que /cobro y /merca-reporte) ============
+# El dato que más le importa a quien revisa /contactar es CUÁNDO se comprometió a pagar el
+# cliente (para hacerle seguimiento) — por eso va arriba en el resumen, junto con el nombre y
+# la cédula en negrita. El resto del detalle queda agrupado debajo de la línea divisoria.
+def _texto_contacto_v2(datos_campos, fecha, usuario_slack):
+    nombre = datos_campos.get("nombre", "")
+    telefono = datos_campos.get("telefono", "")
+    cedula = datos_campos.get("cedula", "")
+    compromiso = datos_campos.get("compromiso", "")
+    cobrador = datos_campos.get("cobrador", "")
+    comentario = datos_campos.get("comentario", "")
+    return (
+        f"📞 *Contacto registrado — Compromiso: {compromiso}*\n"
+        f"*{nombre} · Cédula {cedula}*\n"
+        f"\n"
+        f"──────────────────────────\n"
+        f"📅 *Fecha:* {fecha}\n"
+        f"👤 *Cobrador:* {cobrador} (<@{usuario_slack}>)\n"
+        f"📱 *Teléfono:* {telefono}\n"
+        f"💬 *Comentario:* {comentario}"
+    )
+# ============ FIN MENSAJE REDISEÑADO ============
+
+
 FORM_SPECS["contactar"] = {
     "callback_id": "form_contactar",
     "titulo": "Reportar Contacto",
@@ -70,6 +94,7 @@ FORM_SPECS["contactar"] = {
         ("Cliente", "nombre"), ("Teléfono", "telefono"), ("Cédula", "cedula"),
         ("Compromiso de pago", "compromiso"), ("Cobrador", "cobrador"), ("Comentario", "comentario"),
     ],
+    "construir_texto": _texto_contacto_v2,
 }
 
 
