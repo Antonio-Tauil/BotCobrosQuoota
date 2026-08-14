@@ -14,7 +14,7 @@ from google.oauth2.service_account import Credentials
 
 from config import app, CANAL_SEGUIMIENTO, CANAL_CIERRE, SUPERVISOR_ID, get_cliente_busqueda
 from validaciones import _solo_digitos, parse_numero
-from motor_formularios import _resumen_metricas_hoy
+from motor_formularios import _resumen_metricas_hoy, _marcar_inicio_reporte, _marcar_fin_reporte
 
 
 # ============ RADAR DE PROMESAS DE PAGO (Fase 1) ============
@@ -124,6 +124,7 @@ def _parsear_fecha_radar(texto, hoy):
 
 def generar_resumen_promesas():
     """Lee 'Contactados', agrupa promesas por cobrador y publica el resumen."""
+    _marcar_inicio_reporte("Radar de Promesas")
     try:
         creds_json = json.loads(os.environ["GOOGLE_CREDENTIALS"])
         creds_json["private_key"] = creds_json["private_key"].replace("\\n", "\n")
@@ -260,6 +261,8 @@ def generar_resumen_promesas():
     except Exception as e:
         print(f"❌ Error generando el resumen de promesas: {type(e).__name__}: {e}")
         _avisar_falla_reporte("Radar de Promesas", e)
+    finally:
+        _marcar_fin_reporte("Radar de Promesas")
 
 
 # Comando manual para PROBAR el radar sin esperar a las 4 PM
@@ -362,6 +365,7 @@ def promesa_fallida(ack, body, client):
 
 def generar_cierre_diario():
     """Lee 'Pagos Recibidos', suma los cobros de HOY y publica el cierre del día."""
+    _marcar_inicio_reporte("Cierre Diario")
     try:
         cliente = get_cliente_busqueda()
         spreadsheet = cliente.open_by_key(os.environ["SHEET_ID"])
@@ -443,6 +447,8 @@ def generar_cierre_diario():
     except Exception as e:
         print(f"❌ Error generando el cierre diario: {type(e).__name__}: {e}")
         _avisar_falla_reporte("Cierre Diario", e)
+    finally:
+        _marcar_fin_reporte("Cierre Diario")
 
 
 # Comando manual para probar el cierre sin esperar las 6 PM
