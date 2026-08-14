@@ -901,6 +901,26 @@ def _opciones_lista(lista):
     return [{"text": {"type": "plain_text", "text": x}, "value": x} for x in lista]
 
 
+# ============ MENSAJE REDISEÑADO (mismo estilo que el resto de comandos rediseñados) ============
+def _texto_liquidacion_nueva_v2(datos_campos, fecha, usuario_slack):
+    nombre = datos_campos.get("nombre", "")
+    cedula = datos_campos.get("cedula", "")
+    cliente = datos_campos.get("cliente", "")
+    base = datos_campos.get("base", "")
+    estatus = datos_campos.get("estatus", "")
+    return (
+        f"🌟 *Nueva persona en Lista VIP — {estatus}*\n"
+        f"*{nombre} · Cédula {cedula}*\n"
+        f"\n"
+        f"──────────────────────────\n"
+        f"📅 *Fecha:* {fecha}\n"
+        f"👤 *Reportado por:* <@{usuario_slack}>\n"
+        f"🏢 *Cliente/Empresa:* {cliente}\n"
+        f"📂 *Base:* {base}"
+    )
+# ============ FIN MENSAJE REDISEÑADO ============
+
+
 FORM_SPECS["liquidacion_nueva"] = {
     "callback_id": "form_liquidacion_nueva",
     "titulo": "Nueva Liquidación",
@@ -927,6 +947,7 @@ FORM_SPECS["liquidacion_nueva"] = {
         ("Nombre", "nombre"), ("Cédula", "cedula"), ("Cliente/Empresa", "cliente"),
         ("Base", "base"), ("Estatus", "estatus"),
     ],
+    "construir_texto": _texto_liquidacion_nueva_v2,
 }
 
 
@@ -994,6 +1015,22 @@ def rechazar_liquidacion_nueva(ack, body, client):
 # sigue siendo la función propia actualizar_estatus_liquidacion (arriba), porque
 # "actualizar" es una operación distinta a "guardar_generico" (que siempre agrega
 # una fila nueva).
+# ============ MENSAJE REDISEÑADO (mismo estilo que el resto de comandos rediseñados) ============
+def _texto_liquidacion_estatus_v2(datos_campos, fecha, usuario_slack):
+    cedula = datos_campos.get("cedula", "")
+    nombre = datos_campos.get("nombre", "")
+    estatus = datos_campos.get("estatus", "")
+    return (
+        f"🔄 *Cambio de estatus — {estatus}*\n"
+        f"*{nombre} · Cédula {cedula}*\n"
+        f"\n"
+        f"──────────────────────────\n"
+        f"📅 *Fecha:* {fecha}\n"
+        f"👤 *Solicitado por:* <@{usuario_slack}>"
+    )
+# ============ FIN MENSAJE REDISEÑADO ============
+
+
 FORM_SPECS["liquidacion_estatus"] = {
     "callback_id": "form_liquidacion_estatus",
     "titulo": "Cambiar Estatus",
@@ -1007,6 +1044,7 @@ FORM_SPECS["liquidacion_estatus"] = {
     "titulo_mensaje": "Cambio de estatus solicitado",
     "emoji_mensaje": "🔄",
     "campos_mensaje": [("Nombre", "nombre"), ("Cédula", "cedula"), ("Nuevo estatus", "estatus")],
+    "construir_texto": _texto_liquidacion_estatus_v2,
 }
 
 
