@@ -14,25 +14,65 @@ from validaciones import (
 FORM_SPECS = {}
 
 
-def _construir_blocks_formulario(spec):
+def _valor_actual_bloque(valores_view, block_id):
+    """Lee el valor RAW que tiene AHORA MISMO un campo del modal (tal como está en Slack en
+    este instante) sin pasar por 'calcular' de la ficha. Se usa para repoblar un modal con lo
+    que la persona ya había escrito, cuando el modal se reconstruye (ej. al apretar un botón
+    dentro del formulario, como 'Ver historial'). Para un select devuelve el dict completo
+    {"text": {...}, "value": ...} (listo para usar como 'initial_option'); para texto,
+    el string tal cual (listo para 'initial_value'). Devuelve None si el campo está vacío."""
+    if not valores_view:
+        return None
+    try:
+        estado = valores_view[block_id]["valor"]
+    except (KeyError, TypeError):
+        return None
+    if "selected_option" in estado:
+        return estado.get("selected_option")
+    return estado.get("value") or None
+
+
+def _construir_blocks_formulario(spec, valores_view=None, texto_extra=None):
+    """Arma los blocks del modal a partir de la ficha. 'valores_view' es opcional: si se pasa
+    (el 'state.values' actual del modal), cada campo se repuebla con lo que la persona ya había
+    escrito/seleccionado — necesario cuando el modal se reconstruye con views_update (ej. al
+    apretar 'Ver historial' dentro de /cobro), para no borrarle lo que ya llevaba llenado.
+    'texto_extra' es opcional: si se pasa, se agrega como un bloque de texto al final (ej. el
+    resultado del historial del cliente)."""
     blocks = []
     for campo in spec["campos"]:
         elemento = {"action_id": "valor"}
+        valor_actual = _valor_actual_bloque(valores_view, campo["id"])
         if campo["tipo"] == "select":
             elemento["type"] = "static_select"
             elemento["placeholder"] = {"type": "plain_text", "text": "Selecciona"}
             opciones = campo["opciones"]
             elemento["options"] = opciones() if callable(opciones) else opciones
+            if valor_actual:
+                elemento["initial_option"] = valor_actual
         else:
             elemento["type"] = "plain_text_input"
             if campo.get("multiline"):
                 elemento["multiline"] = True
+            if valor_actual:
+                elemento["initial_value"] = valor_actual
         blocks.append({
             "type": "input", "block_id": campo["id"],
             "optional": campo.get("opcional", False),
             "label": {"type": "plain_text", "text": campo["label"]},
             "element": elemento,
         })
+    if spec.get("boton_historial"):
+        blocks.append({
+            "type": "actions", "block_id": "acciones_historial",
+            "elements": [{
+                "type": "button",
+                "text": {"type": "plain_text", "text": "🔍 Ver historial del cliente"},
+                "action_id": spec["boton_historial"],
+            }],
+        })
+    if texto_extra:
+        blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": texto_extra}})
     return blocks
 
 
