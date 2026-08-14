@@ -14,6 +14,7 @@ from google.oauth2.service_account import Credentials
 
 from config import app, CANAL_SEGUIMIENTO, CANAL_CIERRE, SUPERVISOR_ID, get_cliente_busqueda
 from validaciones import _solo_digitos, parse_numero
+from motor_formularios import _resumen_metricas_hoy
 
 
 # ============ RADAR DE PROMESAS DE PAGO (Fase 1) ============
@@ -428,6 +429,15 @@ def generar_cierre_diario():
         # ============ FIN MENSAJE REDISEÑADO (cierre diario) ============
 
         mensaje = "\n".join(lineas)
+
+        # ============ RESUMEN DE ACTIVIDAD DEL DÍA (para gerencia) ============
+        # Cuántos formularios se enviaron/aprobaron/rechazaron hoy en TODOS los comandos
+        # (no solo cobros) — ver motor_formularios.py (_registrar_metrica/_resumen_metricas_hoy).
+        resumen_actividad = _resumen_metricas_hoy()
+        if resumen_actividad:
+            mensaje += "\n\n" + resumen_actividad
+        # ============ FIN RESUMEN DE ACTIVIDAD DEL DÍA ============
+
         app.client.chat_postMessage(channel=CANAL_CIERRE, text=mensaje)
         print(f"✅ Cierre diario publicado: {cantidad} cobros, ${total_usd:,.2f}")
     except Exception as e:
