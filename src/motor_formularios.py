@@ -9,6 +9,7 @@ from zoneinfo import ZoneInfo
 from validaciones import (
     _validar_view, _registro_ya_guardado, _guardar_fila_por_encabezado, _id_amigable,
     _ya_procesado, _reservar_mensaje, _buscar_duplicado_reciente,
+    _normalizar_para_comparar, _columna_por_nombre,
 )
 
 FORM_SPECS = {}
@@ -299,3 +300,104 @@ def _rechazar_generico(nombre_spec, body, client):
                  "text": f"❌ *RECHAZADO* por <@{body['user']['id']}> el {fecha_revision}\n\n{texto_original}"}}]
     )
 # ============ FIN MOTOR GENÉRICO DE FORMULARIOS ============
+
+
+# ============ BOTÓN "Ver historial del cliente" (genérico, para cualquier ficha) ============
+# Antes esto solo existía en /cobro (con _historial_reciente_cliente y ver_historial_cobro
+# escritos a mano). Para no repetir prácticamente el mismo código otras 4 veces (/domiciliar,
+# /conciliar, /cobro-callcenter, /cobro-comercial), se generalizó en dos piezas:
+#   1. _historial_reciente_generico(): busca las últimas coincidencias en la hoja (reutiliza
+#      el mismo criterio de comparación que "verificar_duplicado" — por cédula o por texto).
+#   2. _construir_handler_historial(): arma el handler del botón para una ficha dada, usando
+#      la info que la ficha YA tiene en "verificar_duplicado" (campo, columna, columna_fecha,
+#      modo) — así cada comando solo necesita indicar qué columnas de monto/detalle mostrar.
+
+def _historial_reciente_generico(sheet, columna_busqueda, valor_busqueda, modo, columna_fecha,
+                                  columnas_valores, maximo=3):
+    """Devuelve los últimos 'maximo' registros de 'sheet' que coincidan con 'valor_busqueda'
+    en 'columna_busqueda' (mismo criterio de comparación de _buscar_duplicado_reciente: por
+    cédula si modo="cedula", por texto normalizado si modo="texto"), como una lista de tuplas
+    (fecha, resumen). 'columnas_valores' es la lista de columnas a mostrar junto a la fecha
+    (ej. montos). Nunca lanza error: si algo falla, simplemente no hay historial que mostrar."""
+    if not valor_busqueda or sheet is None:
+        return []
+    try:
+        col_busqueda = _columna_por_nombre(sheet, columna_busqueda)
+        col_fecha = _columna_por_nombre(sheet, columna_fecha)
+        if col_busqueda is None or col_fecha is None:
+            return []
+        idx_busqueda, idx_fecha = col_busqueda - 1, col_fecha - 1
+        idx_valores = []
+        for nombre_col in columnas_valores:
+            col = _columna_por_nombre(sheet, nombre_col)
+            idx_valores.append((col - 1) if col else None)
+        objetivo = _normalizar_para_comparar(valor_busqueda, modo)
+        if not objetivo:
+            return []
+        coincidencias = []
+        for fila in sheet.get_all_values()[1:]:
+            if len(fila) <= idx_busqueda:
+                continue
+            if _normalizar_para_comparar(fila[idx_busqueda], modo) != objetivo:
+                continue
+            fecha = fila[idx_fecha] if len(fila) > idx_fecha else ""
+            valores = []
+            for idx in idx_valores:
+                if idx is not None and len(fila) > idx and fila[idx].strip():
+                    valores.append(fila[idx].strip())
+            coincidencias.append((fecha, " / ".join(valores) if valores else "(sin datos)"))
+        return coincidencias[-maximo:]
+    except Exception as e:
+        print(f"⚠️ No se pudo obtener el historial: {e}")
+        return []
+
+
+def _construir_handler_historial(nombre_spec, columnas_valores):
+    """Arma el handler del botón 'Ver historial' para la ficha 'nombre_spec' (que debe tener
+    'boton_historial' y 'verificar_duplicado' definidos). Se registra en el archivo del
+    comando así:
+        _handler_historial_x = _construir_handler_historial("x", ["Columna A", "Columna B"])
+        @app.action(FORM_SPECS["x"]["boton_historial"])
+        def ver_historial_x(ack, body, client):
+            _handler_historial_x(ack, body, client)
+    """
+    def _handler(ack, body, client):
+        ack()
+        spec = FORM_SPECS[nombre_spec]
+        dup_spec = spec["verificar_duplicado"]
+        valores_view = body["view"]["state"]["values"]
+        valor_input = (_valor_actual_bloque(valores_view, dup_spec["campo"]) or "").strip()
+        action_id = spec["boton_historial"]
+        if not valor_input:
+            texto_extra = f"⚠️ Escribe primero la/el {dup_spec['etiqueta']} arriba, y vuelve a apretar el botón."
+        else:
+            try:
+                sheet = spec["abrir_hoja"]()
+            except Exception as e:
+                sheet = None
+                print(f"⚠️ [{action_id}] No se pudo abrir la hoja: {e}")
+            historial = _historial_reciente_generico(
+                sheet, dup_spec["columna"], valor_input, dup_spec.get("modo", "cedula"),
+                dup_spec["columna_fecha"], columnas_valores
+            )
+            if historial:
+                lineas = "\n".join(f"• {f} — {m}" for f, m in historial)
+                texto_extra = f"📜 *Historial reciente de {dup_spec['etiqueta']} {valor_input}:*\n{lineas}"
+            else:
+                texto_extra = f"📜 No encontré registros anteriores de {dup_spec['etiqueta']} {valor_input}."
+        try:
+            client.views_update(
+                view_id=body["view"]["id"],
+                hash=body["view"]["hash"],
+                view={
+                    "type": "modal",
+                    "callback_id": spec["callback_id"],
+                    "title": {"type": "plain_text", "text": spec["titulo"]},
+                    "submit": {"type": "plain_text", "text": "Enviar"},
+                    "blocks": _construir_blocks_formulario(spec, valores_view, texto_extra),
+                }
+            )
+        except Exception as e:
+            print(f"⚠️ [{action_id}] No se pudo actualizar el modal: {e}")
+    return _handler
+# ============ FIN BOTÓN "Ver historial del cliente" (genérico) ============
