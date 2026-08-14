@@ -160,11 +160,30 @@ def _combinar_resumenes(*resumenes):
     return total
 
 
+def _medalla(posicion):
+    """1->🥇, 2->🥈, 3->🥉, el resto->'4.', '5.', etc. — para los rankings por persona de
+    los reportes (semanal, mensual, cierre diario), para que se note de un vistazo quién
+    va ganando en vez de una lista plana de viñetas."""
+    return {1: "🥇", 2: "🥈", 3: "🥉"}.get(posicion, f"{posicion}.")
+
+
+def _barra_comparativa(valor, referencia, ancho=10):
+    """Barra visual (▰ llenos / ▱ vacíos) proporcional a 'valor' contra el mayor entre
+    'valor' y 'referencia' — para comparar dos montos (este mes vs. el anterior) de un
+    vistazo, sin depender de que Slack alinee texto en columnas."""
+    tope = max(valor, referencia, 0.01)
+    llenos = round((valor / tope) * ancho)
+    llenos = max(0, min(ancho, llenos))
+    return "▰" * llenos + "▱" * (ancho - llenos)
+
+
+# ============ MENSAJE REDISEÑADO (mismo estilo del resto del bot: resumen arriba + línea
+# divisoria, y ranking con medallas para el top 3 por persona) ============
 def _formatear_reporte(titulo, emoji, resumen, lunes, domingo, mostrar_usd=True):
     lineas = [
         f"{emoji} *Reporte semanal — {titulo}*",
         f"Semana: {lunes.strftime('%d/%m/%Y')} al {domingo.strftime('%d/%m/%Y')}",
-        "",
+        "──────────────────────────",
     ]
     if resumen["conteo"] == 0:
         lineas.append("No hubo registros esta semana.")
@@ -177,9 +196,11 @@ def _formatear_reporte(titulo, emoji, resumen, lunes, domingo, mostrar_usd=True)
     if resumen["por_persona"]:
         lineas.append("")
         lineas.append("*Por persona:*")
-        for persona in sorted(resumen["por_persona"].keys(), key=lambda p: resumen["por_persona"][p], reverse=True):
-            lineas.append(f"   • {persona.title()} — Bs. {resumen['por_persona'][persona]:,.2f}")
+        ranking = sorted(resumen["por_persona"].keys(), key=lambda p: resumen["por_persona"][p], reverse=True)
+        for posicion, persona in enumerate(ranking, 1):
+            lineas.append(f"   {_medalla(posicion)} {persona.title()} — Bs. {resumen['por_persona'][persona]:,.2f}")
     return "\n".join(lineas)
+# ============ FIN MENSAJE REDISEÑADO (semanal) ============
 
 
 def _rango_semana_pasada():
@@ -324,11 +345,14 @@ def _rango_mes_anterior_a(inicio_de_un_mes):
     return inicio_mes_anterior, fin_mes_anterior
 
 
+# ============ MENSAJE REDISEÑADO (mismo estilo del resto del bot: resumen arriba + línea
+# divisoria, ranking con medallas, y una barra visual comparando este mes contra el
+# anterior en vez de solo el texto del % de cambio) ============
 def _formatear_reporte_mensual(titulo, emoji, resumen, resumen_anterior, inicio, fin, mostrar_usd=True):
     lineas = [
         f"{emoji} *Reporte mensual — {titulo}*",
         f"Mes: {inicio.strftime('%m/%Y')} ({inicio.strftime('%d/%m')} al {fin.strftime('%d/%m/%Y')})",
-        "",
+        "──────────────────────────",
     ]
     if resumen["conteo"] == 0:
         lineas.append("No hubo registros este mes.")
@@ -342,15 +366,18 @@ def _formatear_reporte_mensual(titulo, emoji, resumen, resumen_anterior, inicio,
         cambio = ((resumen["total_bs"] - resumen_anterior["total_bs"]) / resumen_anterior["total_bs"]) * 100
         flecha = "📈" if cambio >= 0 else "📉"
         lineas.append(f"{flecha} *Vs. mes anterior:* {cambio:+.1f}% en Bs")
+        lineas.append(f"   `Ant.` {_barra_comparativa(resumen_anterior['total_bs'], resumen['total_bs'])}")
+        lineas.append(f"   `Este` {_barra_comparativa(resumen['total_bs'], resumen_anterior['total_bs'])}")
     else:
         lineas.append("📈 *Vs. mes anterior:* sin datos del mes anterior para comparar")
     if resumen["por_persona"]:
         lineas.append("")
         lineas.append("*Por persona (top 5):*")
         top5 = sorted(resumen["por_persona"].keys(), key=lambda p: resumen["por_persona"][p], reverse=True)[:5]
-        for persona in top5:
-            lineas.append(f"   • {persona.title()} — Bs. {resumen['por_persona'][persona]:,.2f}")
+        for posicion, persona in enumerate(top5, 1):
+            lineas.append(f"   {_medalla(posicion)} {persona.title()} — Bs. {resumen['por_persona'][persona]:,.2f}")
     return "\n".join(lineas)
+# ============ FIN MENSAJE REDISEÑADO (mensual) ============
 
 
 def generar_reportes_mensuales():
