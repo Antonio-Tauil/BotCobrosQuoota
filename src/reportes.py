@@ -25,7 +25,7 @@ from datetime import datetime, date, timedelta
 from zoneinfo import ZoneInfo
 from google.oauth2.service_account import Credentials
 
-from config import app, SHEET_ID_MERCADEO, CANAL_CIERRE, CANAL_MERCADEO_PAGOS, CANAL_REPORTES_MENSUALES
+from config import app, SHEET_ID_MERCADEO, CANAL_CIERRE, CANAL_MERCADEO_PAGOS, CANAL_REPORTES_MENSUALES, SUPERVISOR_ID
 from validaciones import parse_numero, _columna_por_nombre
 from motor_formularios import FORM_SPECS
 from cobros import _abrir_hoja_domiciliacion, _abrir_hoja_cobro2, _abrir_hoja_conciliacion, _abrir_hoja_comercial
@@ -103,6 +103,21 @@ def _con_reintento(func, intentos=3, espera_inicial=5):
                   f"reintentando en {espera}s (intento {intento + 1}/{intentos})...")
             time.sleep(espera)
             espera *= 3
+
+
+# ============ ALERTA SI UN REPORTE FALLA (antes solo quedaba en los logs de Railway, que
+# nadie revisa a diario — ahora también llega un DM al supervisor, igual que hace
+# main.py con cualquier error de un comando/botón) ============
+def _avisar_falla_reporte(nombre_reporte, error):
+    try:
+        app.client.chat_postMessage(
+            channel=SUPERVISOR_ID,
+            text=(f"🔴 *Robotín: falló el reporte '{nombre_reporte}'*\n```{error}```\n"
+                  "Revisa los logs de Railway para más detalle.")
+        )
+    except Exception as e:
+        print(f"⚠️ No se pudo enviar la alerta de '{nombre_reporte}': {e}")
+# ============ FIN ALERTA SI UN REPORTE FALLA ============
 
 
 def _sumar_area(ws, col_fecha, col_monto_bs, col_monto_usd, col_persona, lunes, domingo):
@@ -232,6 +247,7 @@ def generar_reportes_semanales():
         )
     except Exception as e:
         print(f"❌ Reporte semanal [Cobranzas]: error: {type(e).__name__}: {e}")
+        _avisar_falla_reporte("Reporte semanal — Cobranzas", e)
 
     try:
         r_cc = _sumar_area(_con_reintento(_abrir_hoja_cobro2), "Fecha", "MontoBs", "MontoUsd",
@@ -242,6 +258,7 @@ def generar_reportes_semanales():
         )
     except Exception as e:
         print(f"❌ Reporte semanal [Call Center]: error: {type(e).__name__}: {e}")
+        _avisar_falla_reporte("Reporte semanal — Call Center", e)
 
     try:
         r_com = _sumar_area(_con_reintento(_abrir_hoja_comercial), "Fecha", "MontoBs", "MontoUsd",
@@ -252,6 +269,7 @@ def generar_reportes_semanales():
         )
     except Exception as e:
         print(f"❌ Reporte semanal [Comercial]: error: {type(e).__name__}: {e}")
+        _avisar_falla_reporte("Reporte semanal — Comercial", e)
 
     try:
         r_conc = _sumar_area(_con_reintento(_abrir_hoja_conciliacion), "Fecha conciliación", "Monto reportado",
@@ -263,6 +281,7 @@ def generar_reportes_semanales():
         )
     except Exception as e:
         print(f"❌ Reporte semanal [Conciliación]: error: {type(e).__name__}: {e}")
+        _avisar_falla_reporte("Reporte semanal — Conciliación", e)
 
     try:
         r_merc = _sumar_area(_con_reintento(lambda: _abrir_hoja_mercadeo("Conciliacion")), "Fecha de Reporte",
@@ -273,6 +292,7 @@ def generar_reportes_semanales():
         )
     except Exception as e:
         print(f"❌ Reporte semanal [Mercadeo]: error: {type(e).__name__}: {e}")
+        _avisar_falla_reporte("Reporte semanal — Mercadeo", e)
 
     print("✅ Reportes semanales generados.")
 
@@ -407,6 +427,7 @@ def generar_reportes_mensuales():
             )
         except Exception as e:
             print(f"❌ Reporte mensual [{titulo}]: error: {type(e).__name__}: {e}")
+            _avisar_falla_reporte(f"Reporte mensual — {titulo}", e)
 
     print("✅ Reportes mensuales generados.")
 
