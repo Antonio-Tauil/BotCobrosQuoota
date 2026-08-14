@@ -487,6 +487,33 @@ def _calcular_domiciliacion(datos):
     return {"monto_bs": monto_bs_fmt, "monto_usd": monto_usd_str, "cuenta": cuenta_fmt}
 
 
+# ============ MENSAJE REDISEÑADO (mismo estilo que /cobro, /merca-reporte y /contactar) ============
+# Lo que más le importa a quien aprueba una domiciliación es cuánto se recuperó, en $ — igual
+# que en /cobro — así que va arriba en el resumen, junto con el nombre de la empresa en negrita.
+def _texto_domiciliar_v2(datos_campos, fecha, usuario_slack):
+    empresa = datos_campos.get("empresa", "")
+    cuenta = datos_campos.get("cuenta", "")
+    monto_bs = datos_campos.get("monto_bs", "")
+    banco = datos_campos.get("banco", "")
+    tasa_bcv = datos_campos.get("tasa_bcv", "")
+    monto_usd = datos_campos.get("monto_usd", "")
+    cobrador = datos_campos.get("cobrador", "")
+    return (
+        f"🏦 *Nueva domiciliación — {monto_usd}*\n"
+        f"*{empresa}*\n"
+        f"\n"
+        f"──────────────────────────\n"
+        f"📅 *Fecha:* {fecha}\n"
+        f"👤 *Reportado por:* <@{usuario_slack}>\n"
+        f"🧑‍💼 *Cobrador:* {cobrador}\n"
+        f"🧾 *Cuenta por cobrar:* {cuenta}\n"
+        f"🏛️ *Banco:* {banco}\n"
+        f"💵 *Monto:* {monto_bs}  (≈ {monto_usd})\n"
+        f"📊 *Tasa BCV:* {tasa_bcv}"
+    )
+# ============ FIN MENSAJE REDISEÑADO ============
+
+
 FORM_SPECS["domiciliar"] = {
     "callback_id": "form_domiciliar",
     "titulo": "Registrar Domiciliación",
@@ -529,6 +556,7 @@ FORM_SPECS["domiciliar"] = {
         ("Empresa", "empresa"), ("Cuenta por cobrar", "cuenta"), ("Monto Bs", "monto_bs"),
         ("Banco", "banco"), ("Tasa BCV", "tasa_bcv"), ("Monto USD", "monto_usd"), ("Cobrador", "cobrador"),
     ],
+    "construir_texto": _texto_domiciliar_v2,
 }
 
 
