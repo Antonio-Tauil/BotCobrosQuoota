@@ -168,6 +168,51 @@ def _historial_reciente_cliente(sheet, cedula_digitos, maximo=3):
 # ============ FIN HISTORIAL RECIENTE DEL CLIENTE ============
 
 
+# ============ LLENADO AUTOMÁTICO DEL FORMULARIO POR CÉDULA ============
+# Cuando alguien escribe una cédula que ya está registrada en 'Pagos Recibidos' o
+# 'Contactados' (las dos hojas donde más clientes quedan con Nombre y Teléfono guardados),
+# el botón "Ver historial" también rellena esos dos campos automáticamente — así no hay
+# que volver a escribirlos a mano, y se reduce el riesgo de un typo en el nombre. A propósito
+# NO es una búsqueda exhaustiva como /buscar-cliente (que revisa 8 hojas): aquí basta con las
+# 2 fuentes más completas, para que el botón responda rápido. Nunca lanza error — si algo
+# falla, simplemente no rellena nada y el formulario sigue funcionando como siempre.
+def _autocompletar_cliente(cedula_digitos):
+    """Busca 'cedula_digitos' en 'Pagos Recibidos' y 'Contactados'. Devuelve
+    {"nombre": ..., "telefono": ...} del primer registro que encuentre (con al menos uno de
+    los dos datos), o None si no aparece en ninguna de las dos."""
+    if not cedula_digitos:
+        return None
+    fuentes = [
+        (_abrir_hoja_pagos_recibidos_cobro, "Cedula", "Nombre", "Telefono"),
+        (_abrir_hoja_contactados, "Cedula", "Nombre", "Telefono"),
+    ]
+    for abrir_hoja, col_ced, col_nombre, col_telefono in fuentes:
+        try:
+            sheet = abrir_hoja()
+        except Exception as e:
+            print(f"⚠️ [autocompletar_cliente] No se pudo abrir una hoja: {e}")
+            continue
+        if sheet is None:
+            continue
+        try:
+            idx_ced = _columna_por_nombre(sheet, col_ced)
+            if idx_ced is None:
+                continue
+            idx_nombre = _columna_por_nombre(sheet, col_nombre)
+            idx_telefono = _columna_por_nombre(sheet, col_telefono)
+            for fila in sheet.get_all_values()[1:]:
+                if len(fila) > idx_ced - 1 and _solo_digitos(fila[idx_ced - 1]) == cedula_digitos:
+                    nombre = fila[idx_nombre - 1].strip() if idx_nombre and len(fila) > idx_nombre - 1 else ""
+                    telefono = fila[idx_telefono - 1].strip() if idx_telefono and len(fila) > idx_telefono - 1 else ""
+                    if nombre or telefono:
+                        return {"nombre": nombre, "telefono": telefono}
+        except Exception as e:
+            print(f"⚠️ [autocompletar_cliente] Error buscando en una hoja: {e}")
+            continue
+    return None
+# ============ FIN LLENADO AUTOMÁTICO DEL FORMULARIO POR CÉDULA ============
+
+
 def guardar_en_sheet(fecha, cobrador, descripcion, numero, cedula, monto_bs, forma_pago, banco, tasa_bcv, monto_usd, registro_id=""):
     try:
         sheet = _abrir_hoja_pagos_recibidos_cobro()
@@ -236,6 +281,7 @@ FORM_SPECS["cobro"] = {
         ]},
     ],
     "boton_historial": "ver_historial_cobro",
+    "boton_historial_label": "🔍 Buscar cliente / ver historial",
 }
 
 
@@ -253,12 +299,28 @@ def reportar_cobro(ack, body, client):
 @app.action("ver_historial_cobro")
 def ver_historial_cobro(ack, body, client):
     ack()
-    valores_view = body["view"]["state"]["values"]
+    valores_view = dict(body["view"]["state"]["values"])
     cedula_input = (_valor_actual_bloque(valores_view, "cedula") or "").strip()
     cedula_digitos = _solo_digitos(cedula_input)
     if not cedula_digitos:
         texto_extra = "⚠️ Escribe primero la cédula del cliente arriba, y vuelve a apretar el botón."
     else:
+        partes_texto = []
+        # ---- Llenado automático: nombre/teléfono ya conocidos de esta cédula ----
+        try:
+            datos_cliente = _autocompletar_cliente(cedula_digitos)
+        except Exception as e:
+            datos_cliente = None
+            print(f"⚠️ [ver_historial_cobro] No se pudo autocompletar los datos del cliente: {e}")
+        if datos_cliente:
+            if datos_cliente.get("nombre"):
+                valores_view["descripcion"] = {"valor": {"value": datos_cliente["nombre"]}}
+            if datos_cliente.get("telefono"):
+                valores_view["numero"] = {"valor": {"value": datos_cliente["telefono"]}}
+            if datos_cliente.get("nombre") or datos_cliente.get("telefono"):
+                partes_texto.append("✅ *Cliente encontrado:* se rellenaron los datos conocidos "
+                                     "(puedes corregirlos si hace falta).")
+        # ---- Historial reciente (como ya funcionaba) ----
         try:
             sheet = _abrir_hoja_pagos_recibidos_cobro()
         except Exception as e:
@@ -267,9 +329,10 @@ def ver_historial_cobro(ack, body, client):
         historial = _historial_reciente_cliente(sheet, cedula_digitos)
         if historial:
             lineas = "\n".join(f"• {f} — {m}" for f, m in historial)
-            texto_extra = f"📜 *Historial reciente de la cédula {cedula_input}:*\n{lineas}"
+            partes_texto.append(f"📜 *Historial reciente de la cédula {cedula_input}:*\n{lineas}")
         else:
-            texto_extra = f"📜 No encontré cobros anteriores de la cédula {cedula_input} en 'Pagos Recibidos'."
+            partes_texto.append(f"📜 No encontré cobros anteriores de la cédula {cedula_input} en 'Pagos Recibidos'.")
+        texto_extra = "\n\n".join(partes_texto)
     spec = FORM_SPECS["cobro"]
     try:
         client.views_update(
@@ -712,6 +775,7 @@ FORM_SPECS["cobro_callcenter"] = {
         "modo": "cedula", "etiqueta": "cédula",
     },
     "boton_historial": "ver_historial_callcenter",
+    "boton_historial_label": "🔍 Buscar cliente / ver historial",
     "canal": "C0BAS4M970S",
     "titulo_mensaje": "Nuevo cobro reportado (Call Center)",
     "emoji_mensaje": "📞💰",
@@ -753,9 +817,12 @@ def rechazar_cobro2(ack, body, client):
     _rechazar_generico("cobro_callcenter", body, client)
 
 
-# Botón "Ver historial" (genérico — ver motor_formularios.py). Busca por cédula.
+# Botón "Ver historial" (genérico — ver motor_formularios.py). Busca por cédula, y de paso
+# rellena nombre/teléfono si ya se conoce al cliente (campos "nombre"/"telefono" coinciden
+# con el mapeo por defecto, no hace falta indicar mapeo_autocompletar).
 _handler_historial_callcenter = _construir_handler_historial(
-    "cobro_callcenter", ["MontoBs", "MontoUsd", "Nº referencia pago"])
+    "cobro_callcenter", ["MontoBs", "MontoUsd", "Nº referencia pago"],
+    autocompletar=_autocompletar_cliente)
 
 
 @app.action("ver_historial_callcenter")
@@ -890,6 +957,7 @@ FORM_SPECS["conciliar"] = {
         "modo": "cedula", "etiqueta": "cédula",
     },
     "boton_historial": "ver_historial_conciliar",
+    "boton_historial_label": "🔍 Buscar cliente / ver historial",
     "canal": "#cobranzas-conciliar",
     "titulo_mensaje": "Nueva conciliación reportada",
     "emoji_mensaje": "🧾",
@@ -933,9 +1001,12 @@ def rechazar_conciliacion(ack, body, client):
     _rechazar_generico("conciliar", body, client)
 
 
-# Botón "Ver historial" (genérico — ver motor_formularios.py). Busca por cédula.
+# Botón "Ver historial" (genérico — ver motor_formularios.py). Busca por cédula, y de paso
+# rellena el nombre si ya se conoce al cliente (aquí el campo se llama "cliente", no "nombre",
+# y /conciliar no tiene campo de teléfono — de ahí el mapeo_autocompletar).
 _handler_historial_conciliar = _construir_handler_historial(
-    "conciliar", ["Monto reportado", "Monto banco", "Estado"])
+    "conciliar", ["Monto reportado", "Monto banco", "Estado"],
+    autocompletar=_autocompletar_cliente, mapeo_autocompletar={"nombre": "cliente"})
 
 
 @app.action("ver_historial_conciliar")
@@ -1265,6 +1336,7 @@ FORM_SPECS["cobro_comercial"] = {
         "modo": "cedula", "etiqueta": "cédula",
     },
     "boton_historial": "ver_historial_comercial",
+    "boton_historial_label": "🔍 Buscar cliente / ver historial",
     "canal": CANAL_COMERCIAL,
     "titulo_mensaje": "Nuevo cobro reportado (Comercial)",
     "emoji_mensaje": "🤝💰",
@@ -1306,9 +1378,10 @@ def rechazar_comercial(ack, body, client):
     _rechazar_generico("cobro_comercial", body, client)
 
 
-# Botón "Ver historial" (genérico — ver motor_formularios.py). Busca por cédula.
+# Botón "Ver historial" (genérico — ver motor_formularios.py). Busca por cédula, y de paso
+# rellena nombre/teléfono si ya se conoce al cliente.
 _handler_historial_comercial = _construir_handler_historial(
-    "cobro_comercial", ["MontoBs", "MontoUsd"])
+    "cobro_comercial", ["MontoBs", "MontoUsd"], autocompletar=_autocompletar_cliente)
 
 
 @app.action("ver_historial_comercial")
