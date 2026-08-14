@@ -24,7 +24,7 @@ from motor_formularios import (
     FORM_SPECS, _construir_blocks_formulario, _abrir_formulario_generico,
     _validar_formulario_generico, _extraer_valores_formulario, _guardar_generico,
     _construir_texto_mensaje, _ejecutar_formulario_generico, _publicar_para_aprobacion,
-    _aprobar_generico, _rechazar_generico, _valor_actual_bloque,
+    _aprobar_generico, _rechazar_generico, _valor_actual_bloque, _construir_handler_historial,
 )
 
 # ============ NUEVO COMANDO /contactar (migrado al Motor Genérico - Fase 3) ============
@@ -549,6 +549,7 @@ FORM_SPECS["domiciliar"] = {
         "campo": "empresa", "columna": "Empresa", "columna_fecha": "Fecha",
         "modo": "texto", "etiqueta": "empresa",
     },
+    "boton_historial": "ver_historial_domiciliar",
     "canal": "#cobranzas-domiciliacion",
     "titulo_mensaje": "Nueva domiciliación reportada",
     "emoji_mensaje": "🏦",
@@ -582,6 +583,17 @@ def aprobar_domiciliacion(ack, body, client):
 def rechazar_domiciliacion(ack, body, client):
     ack()
     _rechazar_generico("domiciliar", body, client)
+
+
+# Botón "Ver historial" (genérico — ver motor_formularios.py). Aquí busca por empresa
+# (no por cédula, ya que /domiciliar no maneja clientes individuales).
+_handler_historial_domiciliar = _construir_handler_historial(
+    "domiciliar", ["Monto recuperado Bs", "MontoUsd"])
+
+
+@app.action("ver_historial_domiciliar")
+def ver_historial_domiciliar(ack, body, client):
+    _handler_historial_domiciliar(ack, body, client)
 # ============ FIN COMANDO /domiciliar ============
 
 
@@ -689,6 +701,7 @@ FORM_SPECS["cobro_callcenter"] = {
         "campo": "cedula", "columna": "Cedula", "columna_fecha": "Fecha",
         "modo": "cedula", "etiqueta": "cédula",
     },
+    "boton_historial": "ver_historial_callcenter",
     "canal": "C0BAS4M970S",
     "titulo_mensaje": "Nuevo cobro reportado (Call Center)",
     "emoji_mensaje": "📞💰",
@@ -728,6 +741,16 @@ def aprobar_cobro2(ack, body, client):
 def rechazar_cobro2(ack, body, client):
     ack()
     _rechazar_generico("cobro_callcenter", body, client)
+
+
+# Botón "Ver historial" (genérico — ver motor_formularios.py). Busca por cédula.
+_handler_historial_callcenter = _construir_handler_historial(
+    "cobro_callcenter", ["MontoBs", "MontoUsd", "Nº referencia pago"])
+
+
+@app.action("ver_historial_callcenter")
+def ver_historial_callcenter(ack, body, client):
+    _handler_historial_callcenter(ack, body, client)
 # ============ FIN COMANDO /cobro-callcenter ============
 
 
@@ -854,6 +877,7 @@ FORM_SPECS["conciliar"] = {
         "campo": "cedula", "columna": "Cédula", "columna_fecha": "Fecha conciliación",
         "modo": "cedula", "etiqueta": "cédula",
     },
+    "boton_historial": "ver_historial_conciliar",
     "canal": "#cobranzas-conciliar",
     "titulo_mensaje": "Nueva conciliación reportada",
     "emoji_mensaje": "🧾",
@@ -895,6 +919,16 @@ def aprobar_conciliacion(ack, body, client):
 def rechazar_conciliacion(ack, body, client):
     ack()
     _rechazar_generico("conciliar", body, client)
+
+
+# Botón "Ver historial" (genérico — ver motor_formularios.py). Busca por cédula.
+_handler_historial_conciliar = _construir_handler_historial(
+    "conciliar", ["Monto reportado", "Monto banco", "Estado"])
+
+
+@app.action("ver_historial_conciliar")
+def ver_historial_conciliar(ack, body, client):
+    _handler_historial_conciliar(ack, body, client)
 # ============ FIN COMANDO /conciliar ============
 
 
@@ -968,6 +1002,10 @@ FORM_SPECS["liquidacion_nueva"] = {
     "columna_id_registro": "ID Registro",
     "anti_duplicado": True,
     "prefijo_id": "LIQNUEVA",
+    "verificar_duplicado": {
+        "campo": "cedula", "columna": "Cedula", "columna_fecha": "Fecha de Registro",
+        "modo": "cedula", "etiqueta": "cédula",
+    },
     "canal": CANAL_LIQUIDACIONES,
     "titulo_mensaje": "Nueva persona en Lista VIP",
     "emoji_mensaje": "🌟",
@@ -1212,6 +1250,7 @@ FORM_SPECS["cobro_comercial"] = {
         "campo": "cedula", "columna": "Cedula", "columna_fecha": "Fecha",
         "modo": "cedula", "etiqueta": "cédula",
     },
+    "boton_historial": "ver_historial_comercial",
     "canal": CANAL_COMERCIAL,
     "titulo_mensaje": "Nuevo cobro reportado (Comercial)",
     "emoji_mensaje": "🤝💰",
@@ -1251,6 +1290,16 @@ def aprobar_comercial(ack, body, client):
 def rechazar_comercial(ack, body, client):
     ack()
     _rechazar_generico("cobro_comercial", body, client)
+
+
+# Botón "Ver historial" (genérico — ver motor_formularios.py). Busca por cédula.
+_handler_historial_comercial = _construir_handler_historial(
+    "cobro_comercial", ["MontoBs", "MontoUsd"])
+
+
+@app.action("ver_historial_comercial")
+def ver_historial_comercial(ack, body, client):
+    _handler_historial_comercial(ack, body, client)
 # ============ FIN COMANDO /cobro-comercial ============
 
 
