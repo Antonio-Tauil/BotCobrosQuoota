@@ -4,8 +4,10 @@ diccionario compartido: cada archivo de comandos (cobros.py, etc.) agrega su pro
 "ficha" con FORM_SPECS["nombre"] = {...} al importarse. Estas funciones saben leer
 cualquier ficha y armar el modal, validar, guardar y publicar — sin repetir código.
 """
+import json
 from datetime import datetime
 from zoneinfo import ZoneInfo
+from config import app
 from validaciones import (
     _validar_view, _registro_ya_guardado, _guardar_fila_por_encabezado, _id_amigable,
     _ya_procesado, _reservar_mensaje, _buscar_duplicado_reciente,
@@ -324,6 +326,10 @@ def _publicar_para_aprobacion(nombre_spec, body, client):
     texto = _construir_texto_mensaje(spec, datos_campos, fecha, usuario_slack)
     metadata_payload = dict(datos_campos)
     metadata_payload["_fecha"] = fecha
+    # Guardamos quién lo reportó ORIGINALMENTE (no solo aparece en el texto del mensaje):
+    # así, si alguien usa el botón "✏️ Editar" para corregir un dato antes de aprobar, el
+    # mensaje corregido sigue diciendo "Reportado por" la persona correcta, no quien editó.
+    metadata_payload["_reportado_por"] = usuario_slack
     # El sufijo del action_id de los botones puede ser distinto al nombre de la ficha
     # (algunos comandos ya tenían un action_id propio en Slack antes de esta migración,
     # p.ej. "domiciliar" usa botones "aprobar_domiciliacion"). "accion_id" en la ficha
@@ -378,6 +384,8 @@ def _publicar_para_aprobacion(nombre_spec, body, client):
                     boton_aprobar,
                     {"type": "button", "text": {"type": "plain_text", "text": "❌ Rechazar"}, "style": "danger",
                      "action_id": f"rechazar_{sufijo_accion}"},
+                    {"type": "button", "text": {"type": "plain_text", "text": "✏️ Editar"},
+                     "action_id": f"editar_{sufijo_accion}"},
                 ]}
             ]
         )
@@ -399,6 +407,7 @@ def _aprobar_generico(nombre_spec, body, client):
     fecha_revision = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y")
     meta = dict(body["message"].get("metadata", {}).get("event_payload", {}))
     fecha_original = meta.pop("_fecha", fecha_revision)
+    meta.pop("_reportado_por", None)
     registro_id = ""
     if spec.get("anti_duplicado"):
         registro_id = _id_amigable(spec.get("prefijo_id", nombre_spec.upper()), body["message"]["ts"])
@@ -432,6 +441,129 @@ def _rechazar_generico(nombre_spec, body, client):
                  "text": f"❌ *RECHAZADO* por <@{body['user']['id']}> el {fecha_revision}\n\n{texto_original}"}}]
     )
 # ============ FIN MOTOR GENÉRICO DE FORMULARIOS ============
+
+
+# ============ BOTÓN "✏️ Editar" ANTES DE APROBAR (genérico, para cualquier ficha) ============
+# Cuando el cobrador se equivoca en un dato (un monto, una cédula mal tipeada), antes había que
+# RECHAZAR todo el formulario y hacer que la persona lo volviera a llenar desde cero. Con este
+# botón, cualquiera que vea el mensaje pendiente puede abrir el mismo formulario ya prellenado
+# con lo que se reportó, corregir solo el campo que hacía falta, y guardar — el mensaje se
+# actualiza con los datos corregidos y sigue esperando Aprobar/Rechazar, como si nada. No toca
+# el Sheet todavía (eso solo pasa al Aprobar) — es una corrección "en el aire", antes de guardar.
+def _valores_view_desde_metadata(spec, meta):
+    """Convierte los valores guardados en la 'metadata' del mensaje (un dict simple
+    block_id -> valor final) a la forma que espera '_construir_blocks_formulario' para
+    repoblar el modal (la misma forma que produce 'state.values' de Slack). Para los
+    campos tipo 'select', busca cuál opción de la ficha corresponde al valor guardado
+    (para poder marcarla como 'initial_option'); si no la encuentra (ej. la opción ya no
+    existe en la lista), simplemente deja ese campo vacío — no rompe nada, la persona solo
+    tiene que volver a elegirlo."""
+    valores_view = {}
+    for campo in spec["campos"]:
+        bid = campo["id"]
+        valor = meta.get(bid, "")
+        if not valor:
+            continue
+        if campo["tipo"] == "select":
+            opciones = campo["opciones"]
+            opciones = opciones() if callable(opciones) else opciones
+            opcion = next((o for o in opciones if o.get("value") == valor), None)
+            if opcion:
+                valores_view[bid] = {"valor": {"selected_option": opcion}}
+        else:
+            valores_view[bid] = {"valor": {"value": valor}}
+    return valores_view
+
+
+def _editar_generico(nombre_spec, body, client):
+    """Handler compartido para el botón '✏️ Editar' de cualquier comando con aprobación.
+    Se llama DESPUÉS de ack(). Abre el mismo modal del formulario, prellenado con lo que ya
+    se había reportado, para corregir antes de aprobar."""
+    spec = FORM_SPECS[nombre_spec]
+    texto_original = body["message"]["blocks"][0]["text"]["text"]
+    if _ya_procesado(texto_original):
+        return  # ya fue aprobado/rechazado — no tiene caso editar algo que ya se resolvió
+    meta = dict(body["message"].get("metadata", {}).get("event_payload", {}))
+    fecha_original = meta.get("_fecha") or datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y")
+    reportado_por = meta.get("_reportado_por") or body["user"]["id"]
+    valores_view = _valores_view_desde_metadata(spec, meta)
+    privado = json.dumps({
+        "nombre_spec": nombre_spec,
+        "canal": body["channel"]["id"],
+        "ts": body["message"]["ts"],
+        "fecha": fecha_original,
+        "reportado_por": reportado_por,
+    })
+    try:
+        client.views_open(
+            trigger_id=body["trigger_id"],
+            view={
+                "type": "modal",
+                "callback_id": "editar_generico_formulario",
+                "private_metadata": privado,
+                "title": {"type": "plain_text", "text": "Editar antes de aprobar"},
+                "submit": {"type": "plain_text", "text": "Guardar cambios"},
+                "blocks": _construir_blocks_formulario(spec, valores_view),
+            }
+        )
+    except Exception as e:
+        print(f"⚠️ [{nombre_spec}] No se pudo abrir el formulario de edición: {e}")
+
+
+@app.view("editar_generico_formulario")
+def _recibir_edicion_generico(ack, body, client):
+    """Un solo handler para TODOS los comandos: sabe qué ficha y qué mensaje corregir por lo
+    que se guardó en 'private_metadata' al abrir el modal (ver _editar_generico)."""
+    try:
+        privado = json.loads(body["view"]["private_metadata"])
+    except Exception:
+        ack()
+        return
+    nombre_spec = privado.get("nombre_spec")
+    spec = FORM_SPECS.get(nombre_spec)
+    if spec is None:
+        ack()
+        return
+    valores_view = body["view"]["state"]["values"]
+    errores = _validar_formulario_generico(nombre_spec, valores_view)
+    if errores:
+        ack(response_action="errors", errors=errores)
+        return
+    ack()
+    try:
+        canal = privado["canal"]
+        ts = privado["ts"]
+        fecha_original = privado.get("fecha") or datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y")
+        reportado_por = privado.get("reportado_por") or body["user"]["id"]
+        editor = body["user"]["id"]
+        datos_campos = _extraer_valores_formulario(spec, valores_view)
+        texto = _construir_texto_mensaje(spec, datos_campos, fecha_original, reportado_por)
+        # El aviso de edición usa ✏️ (no ✅/❌/⚠) para no confundir a _ya_procesado(), que
+        # se fija en esos tres emojis para saber si un mensaje ya fue aprobado/rechazado.
+        texto_con_aviso = f"✏️ *Editado por <@{editor}> antes de aprobar*\n\n{texto}"
+        metadata_payload = dict(datos_campos)
+        metadata_payload["_fecha"] = fecha_original
+        metadata_payload["_reportado_por"] = reportado_por
+        sufijo_accion = spec.get("accion_id", nombre_spec)
+        boton_aprobar = {"type": "button", "text": {"type": "plain_text", "text": "✅ Aprobar"}, "style": "primary",
+                         "action_id": f"aprobar_{sufijo_accion}"}
+        client.chat_update(
+            channel=canal, ts=ts, text=spec["titulo_mensaje"],
+            metadata={"event_type": f"{nombre_spec}_reportado", "event_payload": metadata_payload},
+            blocks=[
+                {"type": "section", "text": {"type": "mrkdwn", "text": texto_con_aviso}},
+                {"type": "actions", "elements": [
+                    boton_aprobar,
+                    {"type": "button", "text": {"type": "plain_text", "text": "❌ Rechazar"}, "style": "danger",
+                     "action_id": f"rechazar_{sufijo_accion}"},
+                    {"type": "button", "text": {"type": "plain_text", "text": "✏️ Editar"},
+                     "action_id": f"editar_{sufijo_accion}"},
+                ]}
+            ]
+        )
+    except Exception as e:
+        print(f"⚠️ [{nombre_spec}] Error guardando la corrección: {e}")
+# ============ FIN BOTÓN "✏️ Editar" ANTES DE APROBAR ============
 
 
 # ============ BOTÓN "Ver historial del cliente" (genérico, para cualquier ficha) ============
