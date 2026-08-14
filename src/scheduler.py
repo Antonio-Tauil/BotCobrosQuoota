@@ -12,7 +12,7 @@ from zoneinfo import ZoneInfo
 from apscheduler.schedulers.background import BackgroundScheduler
 
 from promesas import generar_resumen_promesas, generar_cierre_diario
-from reportes import generar_reportes_semanales, generar_reportes_mensuales
+from reportes import generar_reportes_semanales, generar_reportes_mensuales, revisar_reportes_colgados
 
 
 def iniciar_scheduler():
@@ -21,7 +21,11 @@ def iniciar_scheduler():
     scheduler.add_job(generar_cierre_diario, "cron", hour=18, minute=0)
     scheduler.add_job(generar_reportes_semanales, "cron", day_of_week="mon", hour=8, minute=0)
     scheduler.add_job(generar_reportes_mensuales, "cron", day=1, hour=8, minute=30)
+    # Vigilante de reportes colgados: no genera ningún reporte, solo revisa cada 20 minutos si
+    # alguno de los 4 de arriba empezó y lleva más de 10 minutos sin terminar (algo anormal —
+    # normalmente tardan segundos). No compite por cuota de Sheets: no abre ninguna hoja.
+    scheduler.add_job(revisar_reportes_colgados, "interval", minutes=20)
     scheduler.start()
     print("⏰ Scheduler activo (Radar 4:00 PM, Cierre 6:00 PM, Reporte semanal lunes 8:00 AM, "
-          "Reporte mensual día 1 8:30 AM — hora Venezuela).")
+          "Reporte mensual día 1 8:30 AM, Vigilante de reportes colgados cada 20 min — hora Venezuela).")
     return scheduler
