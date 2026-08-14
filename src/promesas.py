@@ -60,6 +60,28 @@ def _avisar_falla_reporte(nombre_reporte, error):
 # ============ FIN ALERTA SI UN REPORTE FALLA ============
 
 
+def _linea_compacta_promesas(items, con_dias=False, hoy=None, maximo=10):
+    """Arma UNA SOLA línea con los nombres separados por comas (formato compacto, igual al
+    mockup 'Idea C' que se le mostró a Antonio antes de rediseñar el Radar) en vez de una
+    viñeta por persona — corta en 'maximo' y agrega cuántas quedan fuera. Si 'con_dias' es
+    True, agrega 'hace Xd' (y 🔴 si son 3 días o más) — para la sección de Vencidas."""
+    mostrados = items[:maximo]
+    partes = []
+    for it in mostrados:
+        ced = f" · {it['cedula']}" if it.get("cedula") else ""
+        if con_dias:
+            dias = (hoy - it["fecha"]).days
+            alerta = " 🔴" if dias >= 3 else ""
+            partes.append(f"{it['nombre']}{ced} — hace {dias}d{alerta}")
+        else:
+            partes.append(f"{it['nombre']}{ced}")
+    texto = ", ".join(partes)
+    restantes = len(items) - len(mostrados)
+    if restantes > 0:
+        texto += f", … y {restantes} más (ver Sheet)"
+    return texto
+
+
 def _mencion_cobrador(nombre):
     clave = str(nombre).strip().upper()
     ids = COBRADOR_SLACK_IDS.get(clave)
@@ -194,24 +216,20 @@ def generar_resumen_promesas():
                 lineas.append("")
                 lineas.append(f"👤 *{cobrador.upper()}*  {_mencion_cobrador(cobrador)}")
 
+                # ============ FORMATO COMPACTO (mismo estilo del mockup "Idea C": una sola
+                # línea por sección, nombres separados por comas, en vez de una viñeta por
+                # persona — más fácil de leer de un vistazo cuando hay muchas promesas) ============
                 if grupo["hoy"]:
-                    lineas.append(f"   ☀️ _Para hoy ({len(grupo['hoy'])}):_")
-                    for it in grupo["hoy"]:
-                        ced = f" · {it['cedula']}" if it["cedula"] else ""
-                        lineas.append(f"      • {it['nombre']}{ced}")
+                    lineas.append(f"   ☀️ *Para hoy ({len(grupo['hoy'])}):* "
+                                  f"{_linea_compacta_promesas(grupo['hoy'], maximo=15)}")
 
                 if grupo["vencidas"]:
                     # Más recientes primero (fecha más nueva arriba)
                     grupo["vencidas"].sort(key=lambda x: x["fecha"], reverse=True)
                     total_v = len(grupo["vencidas"])
-                    lineas.append(f"   ⏰ _Vencidas ({total_v}):_")
-                    for it in grupo["vencidas"][:10]:
-                        ced = f" · {it['cedula']}" if it["cedula"] else ""
-                        dias = (hoy - it["fecha"]).days
-                        alerta = " 🔴" if dias >= 3 else ""
-                        lineas.append(f"      • {it['nombre']}{ced} — hace {dias}d{alerta}")
-                    if total_v > 10:
-                        lineas.append(f"      … y {total_v - 10} vencida(s) más (ver Sheet)")
+                    lineas.append(f"   ⏰ *Vencidas ({total_v}):* "
+                                  f"{_linea_compacta_promesas(grupo['vencidas'], con_dias=True, hoy=hoy, maximo=10)}")
+                # ============ FIN FORMATO COMPACTO ============
 
         # ---- Sección "revisar fecha" (resumida, no abruma) ----
         if revisar:
