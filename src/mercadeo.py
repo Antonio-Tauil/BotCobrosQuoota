@@ -278,21 +278,23 @@ def recibir_conciliacion_mercadeo(ack, body, client):
     except (TypeError, ZeroDivisionError):
         monto_usd_fmt = "(No calculable)"
 
+    # ============ MENSAJE REDISEÑADO (mismo estilo que /cobro: resumen arriba, detalle
+    # abajo con divisor, nombre+cédula en negrita, monto en Bs. y $ juntos) ============
     texto = (
-        f"*Nueva conciliación de pago (Mercadeo)* 🧾\n"
-        f"*Fecha de Reporte:* {fecha_reporte}\n"
-        f"*Reportado por:* <@{usuario_slack}>\n"
-        f"*Colaborador:* {nombre_colaborador}\n"
-        f"*Teléfono:* {telefono}\n"
-        f"*Cédula:* {cedula}\n"
-        f"*Monto en Bs:* {monto_bs_fmt}\n"
-        f"*Forma de Pago:* {forma_pago}\n"
-        f"*Banco de Origen:* {banco}\n"
-        f"*Fecha de Pago:* {fecha_pago}\n"
-        f"*Monto en USD:* {monto_usd_fmt}\n"
-        f"*Tasa BCV Aplicada:* {tasa_bcv_fmt}\n"
-        f"*Número de Referencia:* {referencia}"
+        f"🧾 *Conciliación de pago — {monto_usd_fmt}*\n"
+        f"*{nombre_colaborador} · Cédula {cedula}*\n"
+        f"\n"
+        f"──────────────────────────\n"
+        f"📅 *Fecha de Reporte:* {fecha_reporte}\n"
+        f"👤 *Reportado por:* <@{usuario_slack}>\n"
+        f"📱 *Teléfono:* {telefono}\n"
+        f"🏦 *Pago:* {forma_pago} · {banco}\n"
+        f"💵 *Monto:* {monto_bs_fmt}  (≈ {monto_usd_fmt})\n"
+        f"📊 *Tasa BCV Aplicada:* {tasa_bcv_fmt}\n"
+        f"📅 *Fecha de Pago:* {fecha_pago}\n"
+        f"🔖 *Número de Referencia:* {referencia}"
     )
+    # ============ FIN MENSAJE REDISEÑADO ============
     try:
         client.chat_postMessage(
             channel=CANAL_MERCADEO_PAGOS,
@@ -377,16 +379,18 @@ def recibir_incidencia_mercadeo(ack, body, client):
     usuario_slack = body["user"]["id"]
     fecha_reporte = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y")
 
+    # ============ MENSAJE REDISEÑADO (mismo estilo que /cobro y conciliación de pago) ============
     texto = (
-        f"*Nueva incidencia técnica (Mercadeo)* 🛠️\n"
-        f"*Fecha de Reporte:* {fecha_reporte}\n"
-        f"*Reportado por:* <@{usuario_slack}>\n"
-        f"*Nombre:* {nombre}\n"
-        f"*Cédula:* {cedula}\n"
-        f"*Empresa:* {empresa}\n"
-        f"*Incidencia:* {incidencia}\n"
-        f"*Descripción:* {descripcion}"
+        f"🛠️ *Incidencia técnica — {incidencia}*\n"
+        f"*{nombre} · Cédula {cedula}*\n"
+        f"\n"
+        f"──────────────────────────\n"
+        f"📅 *Fecha de Reporte:* {fecha_reporte}\n"
+        f"👤 *Reportado por:* <@{usuario_slack}>\n"
+        f"🏢 *Empresa:* {empresa}\n"
+        f"📝 *Descripción:* {descripcion}"
     )
+    # ============ FIN MENSAJE REDISEÑADO ============
     try:
         client.chat_postMessage(
             channel=CANAL_MERCADEO_INCIDENCIAS,
