@@ -1434,6 +1434,27 @@ def _abrir_hoja_escalados():
     return None
 
 
+# ============ MENSAJE REDISEÑADO (mismo estilo que el resto de comandos rediseñados) ============
+def _texto_cliente_escalado_v2(datos_campos, fecha, usuario_slack):
+    nombre = datos_campos.get("nombre", "")
+    cedula = datos_campos.get("cedula", "")
+    telefono = datos_campos.get("telefono", "")
+    empresa = datos_campos.get("empresa", "")
+    incidencia = datos_campos.get("incidencia", "")
+    reportada_por = datos_campos.get("reportada_por", "")
+    return (
+        f"🚩 *Cliente escalado — {empresa}*\n"
+        f"*{nombre} · Cédula {cedula}*\n"
+        f"\n"
+        f"──────────────────────────\n"
+        f"📅 *Fecha:* {fecha}\n"
+        f"👤 *Reportada por:* {reportada_por} (<@{usuario_slack}>)\n"
+        f"📱 *Teléfono:* {telefono}\n"
+        f"⚠️ *Incidencia:* {incidencia}"
+    )
+# ============ FIN MENSAJE REDISEÑADO ============
+
+
 FORM_SPECS["clientes_escalados"] = {
     "callback_id": "form_cliente_escalado",
     "titulo": "Cliente Escalado",
@@ -1458,6 +1479,7 @@ FORM_SPECS["clientes_escalados"] = {
         ("Cliente", "nombre"), ("Teléfono", "telefono"), ("Cédula", "cedula"),
         ("Empresa", "empresa"), ("Incidencia", "incidencia"),
     ],
+    "construir_texto": _texto_cliente_escalado_v2,
 }
 
 
