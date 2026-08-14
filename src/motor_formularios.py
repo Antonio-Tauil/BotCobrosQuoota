@@ -9,7 +9,7 @@ from zoneinfo import ZoneInfo
 from validaciones import (
     _validar_view, _registro_ya_guardado, _guardar_fila_por_encabezado, _id_amigable,
     _ya_procesado, _reservar_mensaje, _buscar_duplicado_reciente,
-    _normalizar_para_comparar, _columna_por_nombre,
+    _normalizar_para_comparar, _columna_por_nombre, _solo_digitos,
 )
 
 FORM_SPECS = {}
@@ -132,7 +132,8 @@ def _construir_blocks_formulario(spec, valores_view=None, texto_extra=None):
             "type": "actions", "block_id": "acciones_historial",
             "elements": [{
                 "type": "button",
-                "text": {"type": "plain_text", "text": "🔍 Ver historial del cliente"},
+                "text": {"type": "plain_text",
+                         "text": spec.get("boton_historial_label", "🔍 Ver historial del cliente")},
                 "action_id": spec["boton_historial"],
             }],
         })
@@ -419,7 +420,7 @@ def _historial_reciente_generico(sheet, columna_busqueda, valor_busqueda, modo, 
         return []
 
 
-def _construir_handler_historial(nombre_spec, columnas_valores):
+def _construir_handler_historial(nombre_spec, columnas_valores, autocompletar=None, mapeo_autocompletar=None):
     """Arma el handler del botón 'Ver historial' para la ficha 'nombre_spec' (que debe tener
     'boton_historial' y 'verificar_duplicado' definidos). Se registra en el archivo del
     comando así:
@@ -427,17 +428,45 @@ def _construir_handler_historial(nombre_spec, columnas_valores):
         @app.action(FORM_SPECS["x"]["boton_historial"])
         def ver_historial_x(ack, body, client):
             _handler_historial_x(ack, body, client)
-    """
+
+    'autocompletar' es opcional: una función(cedula_digitos) -> {"nombre": ..., "telefono": ...}
+    o None si no encontró nada. Si se pasa (y la ficha busca por cédula, no por empresa), el
+    MISMO botón —además de mostrar el historial— rellena los campos del formulario con los
+    datos ya conocidos del cliente, para no escribirlos dos veces. 'mapeo_autocompletar' indica
+    a qué campo del formulario va cada dato (por defecto {"nombre": "nombre", "telefono":
+    "telefono"} — se pasa uno distinto cuando el campo se llama diferente, ej. /conciliar usa
+    "cliente" en vez de "nombre" y no tiene campo de teléfono."""
     def _handler(ack, body, client):
         ack()
         spec = FORM_SPECS[nombre_spec]
         dup_spec = spec["verificar_duplicado"]
-        valores_view = body["view"]["state"]["values"]
+        valores_view = dict(body["view"]["state"]["values"])
         valor_input = (_valor_actual_bloque(valores_view, dup_spec["campo"]) or "").strip()
         action_id = spec["boton_historial"]
         if not valor_input:
             texto_extra = f"⚠️ Escribe primero la/el {dup_spec['etiqueta']} arriba, y vuelve a apretar el botón."
         else:
+            partes_texto = []
+            # ---- Autocompletar nombre/teléfono con lo ya conocido del cliente ----
+            if autocompletar and dup_spec.get("modo", "cedula") == "cedula":
+                try:
+                    datos_cliente = autocompletar(_solo_digitos(valor_input))
+                except Exception as e:
+                    datos_cliente = None
+                    print(f"⚠️ [{action_id}] No se pudo autocompletar los datos del cliente: {e}")
+                if datos_cliente:
+                    mapeo = mapeo_autocompletar or {"nombre": "nombre", "telefono": "telefono"}
+                    campos_ids = {c["id"] for c in spec["campos"]}
+                    algo_relleno = False
+                    for clave_canonica, campo_id in mapeo.items():
+                        valor = datos_cliente.get(clave_canonica)
+                        if valor and campo_id in campos_ids:
+                            valores_view[campo_id] = {"valor": {"value": valor}}
+                            algo_relleno = True
+                    if algo_relleno:
+                        partes_texto.append("✅ *Cliente encontrado:* se rellenaron los datos "
+                                             "conocidos (puedes corregirlos si hace falta).")
+            # ---- Historial reciente (como ya funcionaba) ----
             try:
                 sheet = spec["abrir_hoja"]()
             except Exception as e:
@@ -449,9 +478,10 @@ def _construir_handler_historial(nombre_spec, columnas_valores):
             )
             if historial:
                 lineas = "\n".join(f"• {f} — {m}" for f, m in historial)
-                texto_extra = f"📜 *Historial reciente de {dup_spec['etiqueta']} {valor_input}:*\n{lineas}"
+                partes_texto.append(f"📜 *Historial reciente de {dup_spec['etiqueta']} {valor_input}:*\n{lineas}")
             else:
-                texto_extra = f"📜 No encontré registros anteriores de {dup_spec['etiqueta']} {valor_input}."
+                partes_texto.append(f"📜 No encontré registros anteriores de {dup_spec['etiqueta']} {valor_input}.")
+            texto_extra = "\n\n".join(partes_texto)
         try:
             client.views_update(
                 view_id=body["view"]["id"],
