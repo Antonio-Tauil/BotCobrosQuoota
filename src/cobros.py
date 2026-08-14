@@ -618,6 +618,33 @@ def _calcular_monto_usd(datos):
     return {"monto_bs": monto_bs_fmt, "monto_usd": monto_usd_str}
 
 
+# ============ MENSAJE REDISEÑADO (mismo estilo que /cobro) ============
+def _texto_cobro_callcenter_v2(datos_campos, fecha, usuario_slack):
+    nombre = datos_campos.get("nombre", "")
+    cedula = datos_campos.get("cedula", "")
+    telefono = datos_campos.get("telefono", "")
+    monto_bs = datos_campos.get("monto_bs", "")
+    forma_pago = datos_campos.get("forma_pago", "")
+    banco = datos_campos.get("banco", "")
+    tasa_bcv = datos_campos.get("tasa_bcv", "")
+    monto_usd = datos_campos.get("monto_usd", "")
+    referencia = datos_campos.get("referencia", "")
+    return (
+        f"📞💰 *Cobro Call Center — {monto_usd}*\n"
+        f"*{nombre} · Cédula {cedula}*\n"
+        f"\n"
+        f"──────────────────────────\n"
+        f"📅 *Fecha:* {fecha}\n"
+        f"👤 *Reportado por:* <@{usuario_slack}>\n"
+        f"📱 *Teléfono:* {telefono}\n"
+        f"🏦 *Pago:* {forma_pago} · {banco}\n"
+        f"💵 *Monto:* {monto_bs}  (≈ {monto_usd})\n"
+        f"📊 *Tasa BCV:* {tasa_bcv}\n"
+        f"🔖 *N° Referencia:* {referencia}"
+    )
+# ============ FIN MENSAJE REDISEÑADO ============
+
+
 FORM_SPECS["cobro_callcenter"] = {
     "callback_id": "form_cobro2",
     "titulo": "Cobro Call Center",
@@ -670,6 +697,7 @@ FORM_SPECS["cobro_callcenter"] = {
         ("Monto Bs", "monto_bs"), ("Forma de Pago", "forma_pago"), ("Banco", "banco"),
         ("Tasa BCV", "tasa_bcv"), ("Monto USD", "monto_usd"), ("N° referencia pago", "referencia"),
     ],
+    "construir_texto": _texto_cobro_callcenter_v2,
 }
 
 
@@ -1113,6 +1141,33 @@ def _abrir_hoja_comercial():
         return spreadsheet.sheet1  # respaldo: la primera pestaña, por si cambia el nombre
 
 
+# ============ MENSAJE REDISEÑADO (mismo estilo que /cobro) ============
+def _texto_cobro_comercial_v2(datos_campos, fecha, usuario_slack):
+    nombre = datos_campos.get("nombre", "")
+    cedula = datos_campos.get("cedula", "")
+    telefono = datos_campos.get("telefono", "")
+    monto_bs = datos_campos.get("monto_bs", "")
+    forma_pago = datos_campos.get("forma_pago", "")
+    banco = datos_campos.get("banco", "")
+    tasa_bcv = datos_campos.get("tasa_bcv", "")
+    monto_usd = datos_campos.get("monto_usd", "")
+    empresa = datos_campos.get("empresa", "")
+    return (
+        f"🤝💰 *Cobro Comercial — {monto_usd}*\n"
+        f"*{nombre} · Cédula {cedula}*\n"
+        f"\n"
+        f"──────────────────────────\n"
+        f"📅 *Fecha:* {fecha}\n"
+        f"👤 *Reportado por:* <@{usuario_slack}>\n"
+        f"📱 *Teléfono:* {telefono}\n"
+        f"🏢 *Empresa:* {empresa}\n"
+        f"🏦 *Pago:* {forma_pago} · {banco}\n"
+        f"💵 *Monto:* {monto_bs}  (≈ {monto_usd})\n"
+        f"📊 *Tasa BCV:* {tasa_bcv}"
+    )
+# ============ FIN MENSAJE REDISEÑADO ============
+
+
 FORM_SPECS["cobro_comercial"] = {
     "callback_id": "form_cobro_comercial",
     "titulo": "Cobro Comercial",
@@ -1165,6 +1220,7 @@ FORM_SPECS["cobro_comercial"] = {
         ("Monto Bs", "monto_bs"), ("Forma de Pago", "forma_pago"), ("Banco", "banco"),
         ("Tasa BCV", "tasa_bcv"), ("Monto USD", "monto_usd"), ("Empresa", "empresa"),
     ],
+    "construir_texto": _texto_cobro_comercial_v2,
 }
 
 
@@ -1216,6 +1272,27 @@ def _abrir_hoja_contactados_legal():
     return None
 
 
+# ============ MENSAJE REDISEÑADO (mismo estilo que /contactar) ============
+def _texto_contacto_legal_v2(datos_campos, fecha, usuario_slack):
+    nombre = datos_campos.get("nombre", "")
+    telefono = datos_campos.get("telefono", "")
+    cedula = datos_campos.get("cedula", "")
+    compromiso = datos_campos.get("compromiso", "")
+    cobrador = datos_campos.get("cobrador", "")
+    comentario = datos_campos.get("comentario", "")
+    return (
+        f"⚖️ *Contacto Legal — Compromiso: {compromiso}*\n"
+        f"*{nombre} · Cédula {cedula}*\n"
+        f"\n"
+        f"──────────────────────────\n"
+        f"📅 *Fecha:* {fecha}\n"
+        f"👤 *Cobrador:* {cobrador} (<@{usuario_slack}>)\n"
+        f"📱 *Teléfono:* {telefono}\n"
+        f"💬 *Comentario:* {comentario}"
+    )
+# ============ FIN MENSAJE REDISEÑADO ============
+
+
 FORM_SPECS["contacto_legal"] = {
     "callback_id": "form_contacto_legal",
     "titulo": "Contacto Legal",
@@ -1247,6 +1324,7 @@ FORM_SPECS["contacto_legal"] = {
         ("Cliente", "nombre"), ("Teléfono", "telefono"), ("Cédula", "cedula"),
         ("Compromiso de pago", "compromiso"), ("Cobrador", "cobrador"), ("Comentario", "comentario"),
     ],
+    "construir_texto": _texto_contacto_legal_v2,
 }
 
 
