@@ -24,7 +24,7 @@ from motor_formularios import (
     FORM_SPECS, _construir_blocks_formulario, _abrir_formulario_generico,
     _validar_formulario_generico, _extraer_valores_formulario, _guardar_generico,
     _construir_texto_mensaje, _ejecutar_formulario_generico, _publicar_para_aprobacion,
-    _aprobar_generico, _rechazar_generico,
+    _aprobar_generico, _rechazar_generico, _valor_actual_bloque,
 )
 
 # ============ NUEVO COMANDO /contactar (migrado al Motor Genérico - Fase 3) ============
@@ -207,6 +207,7 @@ FORM_SPECS["cobro"] = {
             {"text": {"type": "plain_text", "text": "Otro"}, "value": "Otro"},
         ]},
     ],
+    "boton_historial": "ver_historial_cobro",
 }
 
 
@@ -214,6 +215,49 @@ FORM_SPECS["cobro"] = {
 def reportar_cobro(ack, body, client):
     ack()
     _abrir_formulario_generico("cobro", body["trigger_id"], client)
+
+
+# ============ BOTÓN "Ver historial del cliente" DENTRO DEL MODAL DE /cobro ============
+# Al apretar el botón (sin cerrar el formulario), busca los últimos 3 cobros de la cédula
+# escrita y actualiza el MISMO modal para mostrarlos arriba, sin perder lo que la persona ya
+# había llenado en los demás campos (por eso _construir_blocks_formulario recibe el
+# 'state.values' actual: repuebla cada campo con su valor de antes).
+@app.action("ver_historial_cobro")
+def ver_historial_cobro(ack, body, client):
+    ack()
+    valores_view = body["view"]["state"]["values"]
+    cedula_input = (_valor_actual_bloque(valores_view, "cedula") or "").strip()
+    cedula_digitos = _solo_digitos(cedula_input)
+    if not cedula_digitos:
+        texto_extra = "⚠️ Escribe primero la cédula del cliente arriba, y vuelve a apretar el botón."
+    else:
+        try:
+            sheet = _abrir_hoja_pagos_recibidos_cobro()
+        except Exception as e:
+            sheet = None
+            print(f"⚠️ [ver_historial_cobro] No se pudo abrir la hoja: {e}")
+        historial = _historial_reciente_cliente(sheet, cedula_digitos)
+        if historial:
+            lineas = "\n".join(f"• {f} — {m}" for f, m in historial)
+            texto_extra = f"📜 *Historial reciente de la cédula {cedula_input}:*\n{lineas}"
+        else:
+            texto_extra = f"📜 No encontré cobros anteriores de la cédula {cedula_input} en 'Pagos Recibidos'."
+    spec = FORM_SPECS["cobro"]
+    try:
+        client.views_update(
+            view_id=body["view"]["id"],
+            hash=body["view"]["hash"],
+            view={
+                "type": "modal",
+                "callback_id": spec["callback_id"],
+                "title": {"type": "plain_text", "text": spec["titulo"]},
+                "submit": {"type": "plain_text", "text": "Enviar"},
+                "blocks": _construir_blocks_formulario(spec, valores_view, texto_extra),
+            }
+        )
+    except Exception as e:
+        print(f"⚠️ [ver_historial_cobro] No se pudo actualizar el modal: {e}")
+# ============ FIN BOTÓN "Ver historial del cliente" ============
 
 
 @app.view("form_cobro")
@@ -261,19 +305,25 @@ def recibir_cobro(ack, body, client):
     except (ValueError, ZeroDivisionError):
         monto_usd_str = "(No calculable)"
         monto_bs_fmt = f"Bs. {monto_bs_str}"
+    # ============ MENSAJE REDISEÑADO (Fase: mensajes más amigables) ============
+    # Formato "resumen arriba, detalle abajo": lo primero que se lee es el dato que más le
+    # importa a quien aprueba (cuánto es, en $), luego el cliente, y el resto del detalle
+    # agrupado debajo de una línea divisoria — en vez de diez líneas de "*Etiqueta:* valor"
+    # seguidas. El monto se muestra en Bs. Y en $ juntos en la misma línea (pedido explícito),
+    # junto con la Tasa BCV usada para ese cálculo.
     texto = (
-        f"*Nuevo cobro reportado* 💰\n"
-        f"*Fecha:* {fecha}\n"
-        f"*Cobrador:* {nombre_cobrador} (<@{cobrador_slack}>)\n"
-        f"*Cliente:* {descripcion}\n"
-        f"*Cédula:* {cedula}\n"
-        f"*Teléfono:* {numero}\n"
-        f"*Monto Bs:* {monto_bs_fmt}\n"
-        f"*Forma de Pago:* {forma_pago}\n"
-        f"*Banco:* {banco}\n"
-        f"*Tasa BCV:* {tasa_bcv_str}\n"
-        f"*Monto USD:* {monto_usd_str}"
+        f"💰 *Nuevo cobro — {monto_usd_str} USD*\n"
+        f"*{descripcion} · Cédula {cedula}*\n"
+        f"\n"
+        f"──────────────────────────\n"
+        f"📅 *Fecha:* {fecha}\n"
+        f"👤 *Cobrador:* {nombre_cobrador} (<@{cobrador_slack}>)\n"
+        f"📱 *Teléfono:* {numero}\n"
+        f"🏦 *Pago:* {forma_pago} · {banco}\n"
+        f"💵 *Monto:* {monto_bs_fmt}  (≈ {monto_usd_str})\n"
+        f"📊 *Tasa BCV:* {tasa_bcv_str}"
     )
+    # ============ FIN MENSAJE REDISEÑADO ============
 
     # ============ AVISO DE POSIBLE DUPLICADO (mismo cliente, misma semana) ============
     # Igual que en el resto de los comandos de cobro (motor_formularios.py): usa 🔁, no ⚠,
