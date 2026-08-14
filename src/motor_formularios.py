@@ -498,3 +498,66 @@ def _construir_handler_historial(nombre_spec, columnas_valores, autocompletar=No
             print(f"⚠️ [{action_id}] No se pudo actualizar el modal: {e}")
     return _handler
 # ============ FIN BOTÓN "Ver historial del cliente" (genérico) ============
+
+
+# ============ BOTÓN "Buscar cliente" — solo autocompletar, sin historial ============
+# Versión más liviana de _construir_handler_historial: para comandos que NO llevan un
+# "verificar_duplicado" en su ficha (ej. /contactar, /contacto-legal, /clientes-escalados —
+# no son formularios de cobro, así que nunca se les agregó el aviso de duplicado) pero que
+# sí se benefician de no reescribir nombre/teléfono si el cliente ya está registrado en otro
+# lado. No requiere 'abrir_hoja' ni 'verificar_duplicado' en la ficha — la función
+# 'autocompletar' que se le pasa ya sabe dónde buscar.
+def _construir_handler_autocompletar(nombre_spec, campo_busqueda, autocompletar, mapeo_autocompletar=None):
+    """Arma el handler del botón 'Buscar cliente' para la ficha 'nombre_spec'. Se registra
+    igual que _construir_handler_historial:
+        _handler_x = _construir_handler_autocompletar("x", "cedula", _autocompletar_cliente)
+        @app.action(FORM_SPECS["x"]["boton_historial"])
+        def ver_historial_x(ack, body, client):
+            _handler_x(ack, body, client)
+    'autocompletar' es una función(valor_digitos) -> {"nombre": ..., "telefono": ...} o None.
+    'mapeo_autocompletar' indica a qué campo del formulario va cada dato (por defecto
+    {"nombre": "nombre", "telefono": "telefono"})."""
+    def _handler(ack, body, client):
+        ack()
+        spec = FORM_SPECS[nombre_spec]
+        valores_view = dict(body["view"]["state"]["values"])
+        valor_input = (_valor_actual_bloque(valores_view, campo_busqueda) or "").strip()
+        action_id = spec["boton_historial"]
+        if not valor_input:
+            texto_extra = "⚠️ Escribe primero la cédula arriba, y vuelve a apretar el botón."
+        else:
+            try:
+                datos_cliente = autocompletar(_solo_digitos(valor_input))
+            except Exception as e:
+                datos_cliente = None
+                print(f"⚠️ [{action_id}] No se pudo autocompletar los datos del cliente: {e}")
+            algo_relleno = False
+            if datos_cliente:
+                mapeo = mapeo_autocompletar or {"nombre": "nombre", "telefono": "telefono"}
+                campos_ids = {c["id"] for c in spec["campos"]}
+                for clave_canonica, campo_id in mapeo.items():
+                    valor = datos_cliente.get(clave_canonica)
+                    if valor and campo_id in campos_ids:
+                        valores_view[campo_id] = {"valor": {"value": valor}}
+                        algo_relleno = True
+            if algo_relleno:
+                texto_extra = ("✅ *Cliente encontrado:* se rellenaron los datos conocidos "
+                                "(puedes corregirlos si hace falta).")
+            else:
+                texto_extra = "🔍 No encontré datos adicionales para esta cédula."
+        try:
+            client.views_update(
+                view_id=body["view"]["id"],
+                hash=body["view"]["hash"],
+                view={
+                    "type": "modal",
+                    "callback_id": spec["callback_id"],
+                    "title": {"type": "plain_text", "text": spec["titulo"]},
+                    "submit": {"type": "plain_text", "text": "Enviar"},
+                    "blocks": _construir_blocks_formulario(spec, valores_view, texto_extra),
+                }
+            )
+        except Exception as e:
+            print(f"⚠️ [{action_id}] No se pudo actualizar el modal: {e}")
+    return _handler
+# ============ FIN BOTÓN "Buscar cliente" ============
