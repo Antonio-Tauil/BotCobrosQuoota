@@ -25,8 +25,59 @@ from motor_formularios import (
     _validar_formulario_generico, _extraer_valores_formulario, _guardar_generico,
     _construir_texto_mensaje, _ejecutar_formulario_generico, _publicar_para_aprobacion,
     _aprobar_generico, _rechazar_generico, _valor_actual_bloque, _construir_handler_historial,
-    _registrar_metrica,
+    _registrar_metrica, _construir_handler_autocompletar,
 )
+
+
+# ============ LLENADO AUTOMÁTICO DEL FORMULARIO POR CÉDULA (compartido entre comandos) ============
+# Cuando alguien escribe una cédula que ya está registrada en 'Pagos Recibidos' o
+# 'Contactados' (las dos hojas donde más clientes quedan con Nombre y Teléfono guardados),
+# el botón "Ver historial"/"Buscar cliente" también rellena esos dos campos automáticamente —
+# así no hay que volver a escribirlos a mano, y se reduce el riesgo de un typo en el nombre.
+# A propósito NO es una búsqueda exhaustiva como /buscar-cliente (que revisa 8 hojas): aquí
+# basta con las 2 fuentes más completas, para que el botón responda rápido. Nunca lanza error
+# — si algo falla, simplemente no rellena nada y el formulario sigue funcionando como siempre.
+# Nota: esta función se define ANTES que _abrir_hoja_pagos_recibidos_cobro/_abrir_hoja_contactados
+# a propósito, para que los comandos que la usan (/contactar, /contacto-legal, etc., que
+# aparecen en el archivo antes que /cobro) puedan pasarla al registrar sus botones sin
+# problema — Python solo necesita que esas funciones existan cuando esta SE EJECUTE, no
+# cuando se defina.
+def _autocompletar_cliente(cedula_digitos):
+    """Busca 'cedula_digitos' en 'Pagos Recibidos' y 'Contactados'. Devuelve
+    {"nombre": ..., "telefono": ...} del primer registro que encuentre (con al menos uno de
+    los dos datos), o None si no aparece en ninguna de las dos."""
+    if not cedula_digitos:
+        return None
+    fuentes = [
+        (_abrir_hoja_pagos_recibidos_cobro, "Cedula", "Nombre", "Telefono"),
+        (_abrir_hoja_contactados, "Cedula", "Nombre", "Telefono"),
+    ]
+    for abrir_hoja, col_ced, col_nombre, col_telefono in fuentes:
+        try:
+            sheet = abrir_hoja()
+        except Exception as e:
+            print(f"⚠️ [autocompletar_cliente] No se pudo abrir una hoja: {e}")
+            continue
+        if sheet is None:
+            continue
+        try:
+            idx_ced = _columna_por_nombre(sheet, col_ced)
+            if idx_ced is None:
+                continue
+            idx_nombre = _columna_por_nombre(sheet, col_nombre)
+            idx_telefono = _columna_por_nombre(sheet, col_telefono)
+            for fila in sheet.get_all_values()[1:]:
+                if len(fila) > idx_ced - 1 and _solo_digitos(fila[idx_ced - 1]) == cedula_digitos:
+                    nombre = fila[idx_nombre - 1].strip() if idx_nombre and len(fila) > idx_nombre - 1 else ""
+                    telefono = fila[idx_telefono - 1].strip() if idx_telefono and len(fila) > idx_telefono - 1 else ""
+                    if nombre or telefono:
+                        return {"nombre": nombre, "telefono": telefono}
+        except Exception as e:
+            print(f"⚠️ [autocompletar_cliente] Error buscando en una hoja: {e}")
+            continue
+    return None
+# ============ FIN LLENADO AUTOMÁTICO DEL FORMULARIO POR CÉDULA ============
+
 
 # ============ NUEVO COMANDO /contactar (migrado al Motor Genérico - Fase 3) ============
 def _abrir_hoja_contactados():
@@ -96,6 +147,8 @@ FORM_SPECS["contactar"] = {
         ("Compromiso de pago", "compromiso"), ("Cobrador", "cobrador"), ("Comentario", "comentario"),
     ],
     "construir_texto": _texto_contacto_v2,
+    "boton_historial": "ver_historial_contactar",
+    "boton_historial_label": "🔍 Buscar cliente",
 }
 
 
@@ -116,6 +169,19 @@ def recibir_contacto(ack, body, client):
         return
     ack()
     _ejecutar_formulario_generico("contactar", body, client)
+
+
+# Botón "Buscar cliente" (rellena nombre/teléfono si ya está registrado en 'Pagos Recibidos'
+# o 'Contactados' — ver motor_formularios.py). No lleva historial porque /contactar no tiene
+# "verificar_duplicado" (varios contactos legítimos con el mismo cliente en la semana son
+# normales acá, a diferencia de un cobro).
+_handler_autocompletar_contactar = _construir_handler_autocompletar(
+    "contactar", "cedula", _autocompletar_cliente)
+
+
+@app.action("ver_historial_contactar")
+def ver_historial_contactar(ack, body, client):
+    _handler_autocompletar_contactar(ack, body, client)
 # ============ FIN COMANDO /contactar ============
 
 
@@ -166,51 +232,6 @@ def _historial_reciente_cliente(sheet, cedula_digitos, maximo=3):
         print(f"⚠️ No se pudo obtener el historial del cliente: {e}")
         return []
 # ============ FIN HISTORIAL RECIENTE DEL CLIENTE ============
-
-
-# ============ LLENADO AUTOMÁTICO DEL FORMULARIO POR CÉDULA ============
-# Cuando alguien escribe una cédula que ya está registrada en 'Pagos Recibidos' o
-# 'Contactados' (las dos hojas donde más clientes quedan con Nombre y Teléfono guardados),
-# el botón "Ver historial" también rellena esos dos campos automáticamente — así no hay
-# que volver a escribirlos a mano, y se reduce el riesgo de un typo en el nombre. A propósito
-# NO es una búsqueda exhaustiva como /buscar-cliente (que revisa 8 hojas): aquí basta con las
-# 2 fuentes más completas, para que el botón responda rápido. Nunca lanza error — si algo
-# falla, simplemente no rellena nada y el formulario sigue funcionando como siempre.
-def _autocompletar_cliente(cedula_digitos):
-    """Busca 'cedula_digitos' en 'Pagos Recibidos' y 'Contactados'. Devuelve
-    {"nombre": ..., "telefono": ...} del primer registro que encuentre (con al menos uno de
-    los dos datos), o None si no aparece en ninguna de las dos."""
-    if not cedula_digitos:
-        return None
-    fuentes = [
-        (_abrir_hoja_pagos_recibidos_cobro, "Cedula", "Nombre", "Telefono"),
-        (_abrir_hoja_contactados, "Cedula", "Nombre", "Telefono"),
-    ]
-    for abrir_hoja, col_ced, col_nombre, col_telefono in fuentes:
-        try:
-            sheet = abrir_hoja()
-        except Exception as e:
-            print(f"⚠️ [autocompletar_cliente] No se pudo abrir una hoja: {e}")
-            continue
-        if sheet is None:
-            continue
-        try:
-            idx_ced = _columna_por_nombre(sheet, col_ced)
-            if idx_ced is None:
-                continue
-            idx_nombre = _columna_por_nombre(sheet, col_nombre)
-            idx_telefono = _columna_por_nombre(sheet, col_telefono)
-            for fila in sheet.get_all_values()[1:]:
-                if len(fila) > idx_ced - 1 and _solo_digitos(fila[idx_ced - 1]) == cedula_digitos:
-                    nombre = fila[idx_nombre - 1].strip() if idx_nombre and len(fila) > idx_nombre - 1 else ""
-                    telefono = fila[idx_telefono - 1].strip() if idx_telefono and len(fila) > idx_telefono - 1 else ""
-                    if nombre or telefono:
-                        return {"nombre": nombre, "telefono": telefono}
-        except Exception as e:
-            print(f"⚠️ [autocompletar_cliente] Error buscando en una hoja: {e}")
-            continue
-    return None
-# ============ FIN LLENADO AUTOMÁTICO DEL FORMULARIO POR CÉDULA ============
 
 
 def guardar_en_sheet(fecha, cobrador, descripcion, numero, cedula, monto_bs, forma_pago, banco, tasa_bcv, monto_usd, registro_id=""):
@@ -1097,6 +1118,8 @@ FORM_SPECS["liquidacion_nueva"] = {
         ("Base", "base"), ("Estatus", "estatus"),
     ],
     "construir_texto": _texto_liquidacion_nueva_v2,
+    "boton_historial": "ver_historial_liquidacion_nueva",
+    "boton_historial_label": "🔍 Buscar cliente / ver historial",
 }
 
 
@@ -1158,6 +1181,18 @@ def rechazar_liquidacion_nueva(ack, body, client):
     _rechazar_generico("liquidacion_nueva", body, client)
 
 
+# Botón "Ver historial" (genérico — ver motor_formularios.py). Busca por cédula; rellena
+# solo "nombre" (este formulario no tiene campo de teléfono).
+_handler_historial_liquidacion_nueva = _construir_handler_historial(
+    "liquidacion_nueva", ["Clientes/Empresas", "Estatus"],
+    autocompletar=_autocompletar_cliente, mapeo_autocompletar={"nombre": "nombre"})
+
+
+@app.action("ver_historial_liquidacion_nueva")
+def ver_historial_liquidacion_nueva(ack, body, client):
+    _handler_historial_liquidacion_nueva(ack, body, client)
+
+
 # Este comando ACTUALIZA una fila que ya existe (busca por cédula), no crea una fila
 # nueva — por eso usa el motor solo para el formulario y la publicación con
 # Aprobar/Rechazar (mismas piezas compartidas que el resto), pero el guardado real
@@ -1180,6 +1215,38 @@ def _texto_liquidacion_estatus_v2(datos_campos, fecha, usuario_slack):
 # ============ FIN MENSAJE REDISEÑADO ============
 
 
+# ============ LLENADO AUTOMÁTICO PARA /liquidacion-estatus ============
+# Distinto del resto: aquí lo que importa es encontrar a la persona ya existente en la
+# Lista VIP (no en 'Pagos Recibidos'/'Contactados'), porque el campo "Nombre (referencia)"
+# es solo para confirmar que se está cambiando el estatus de quien corresponde.
+def _autocompletar_liquidacion(cedula_digitos):
+    """Busca 'cedula_digitos' en la hoja de Liquidaciones (Lista VIP) y devuelve
+    {"nombre": ...} si la encuentra, o None si no está en la lista."""
+    if not cedula_digitos:
+        return None
+    try:
+        sheet = _abrir_hoja_liquidaciones()
+    except Exception as e:
+        print(f"⚠️ [autocompletar_liquidacion] No se pudo abrir la hoja: {e}")
+        return None
+    if sheet is None:
+        return None
+    try:
+        idx_ced = _columna_por_nombre(sheet, "Cedula")
+        idx_nombre = _columna_por_nombre(sheet, "Nombre")
+        if idx_ced is None:
+            return None
+        for fila in sheet.get_all_values()[1:]:
+            if len(fila) > idx_ced - 1 and _solo_digitos(fila[idx_ced - 1]) == cedula_digitos:
+                nombre = fila[idx_nombre - 1].strip() if idx_nombre and len(fila) > idx_nombre - 1 else ""
+                if nombre:
+                    return {"nombre": nombre}
+    except Exception as e:
+        print(f"⚠️ [autocompletar_liquidacion] Error buscando: {e}")
+    return None
+# ============ FIN LLENADO AUTOMÁTICO PARA /liquidacion-estatus ============
+
+
 FORM_SPECS["liquidacion_estatus"] = {
     "callback_id": "form_liquidacion_estatus",
     "titulo": "Cambiar Estatus",
@@ -1194,6 +1261,8 @@ FORM_SPECS["liquidacion_estatus"] = {
     "emoji_mensaje": "🔄",
     "campos_mensaje": [("Nombre", "nombre"), ("Cédula", "cedula"), ("Nuevo estatus", "estatus")],
     "construir_texto": _texto_liquidacion_estatus_v2,
+    "boton_historial": "ver_historial_liquidacion_estatus",
+    "boton_historial_label": "🔍 Buscar en Lista VIP",
 }
 
 
@@ -1239,6 +1308,17 @@ def aprobar_liquidacion_estatus(ack, body, client):
 def rechazar_liquidacion_estatus(ack, body, client):
     ack()
     _rechazar_generico("liquidacion_estatus", body, client)
+
+
+# Botón "Buscar en Lista VIP" (rellena el nombre de referencia si la cédula ya está en la
+# Lista VIP — sin historial, ya que este comando no crea registros nuevos).
+_handler_autocompletar_liquidacion_estatus = _construir_handler_autocompletar(
+    "liquidacion_estatus", "cedula", _autocompletar_liquidacion)
+
+
+@app.action("ver_historial_liquidacion_estatus")
+def ver_historial_liquidacion_estatus(ack, body, client):
+    _handler_autocompletar_liquidacion_estatus(ack, body, client)
 # ============ FIN COMANDOS DE LIQUIDACIONES ============
 
 
@@ -1461,6 +1541,8 @@ FORM_SPECS["contacto_legal"] = {
         ("Compromiso de pago", "compromiso"), ("Cobrador", "cobrador"), ("Comentario", "comentario"),
     ],
     "construir_texto": _texto_contacto_legal_v2,
+    "boton_historial": "ver_historial_contacto_legal",
+    "boton_historial_label": "🔍 Buscar cliente",
 }
 
 
@@ -1491,6 +1573,17 @@ def aprobar_contacto_legal(ack, body, client):
 def rechazar_contacto_legal(ack, body, client):
     ack()
     _rechazar_generico("contacto_legal", body, client)
+
+
+# Botón "Buscar cliente" (rellena nombre/teléfono si ya está registrado — sin historial,
+# igual que /contactar, ya que este comando tampoco lleva "verificar_duplicado").
+_handler_autocompletar_contacto_legal = _construir_handler_autocompletar(
+    "contacto_legal", "cedula", _autocompletar_cliente)
+
+
+@app.action("ver_historial_contacto_legal")
+def ver_historial_contacto_legal(ack, body, client):
+    _handler_autocompletar_contacto_legal(ack, body, client)
 # ============ FIN COMANDO /contacto-legal ============
 
 
@@ -1616,6 +1709,8 @@ FORM_SPECS["clientes_escalados"] = {
         ("Empresa", "empresa"), ("Incidencia", "incidencia"),
     ],
     "construir_texto": _texto_cliente_escalado_v2,
+    "boton_historial": "ver_historial_escalados",
+    "boton_historial_label": "🔍 Buscar cliente",
 }
 
 
@@ -1634,6 +1729,16 @@ def recibir_cliente_escalado(ack, body, client):
         return
     ack()
     _ejecutar_formulario_generico("clientes_escalados", body, client)
+
+
+# Botón "Buscar cliente" (rellena nombre/teléfono si ya está registrado — sin historial).
+_handler_autocompletar_escalados = _construir_handler_autocompletar(
+    "clientes_escalados", "cedula", _autocompletar_cliente)
+
+
+@app.action("ver_historial_escalados")
+def ver_historial_escalados(ack, body, client):
+    _handler_autocompletar_escalados(ack, body, client)
 # ============ FIN COMANDO /clientes-escalados ============
 
 
