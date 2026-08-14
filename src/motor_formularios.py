@@ -148,6 +148,11 @@ def _guardar_generico(nombre_spec, datos_campos, fecha, registro_id=""):
 
 
 def _construir_texto_mensaje(spec, datos_campos, fecha, usuario_slack):
+    # Si la ficha trae "construir_texto" (una función propia), se usa esa en vez del formato
+    # genérico de abajo — así cada comando se puede rediseñar UNO POR UNO (Fase: mensajes más
+    # amigables) sin tocar el formato de los demás comandos que todavía no se han rediseñado.
+    if spec.get("construir_texto"):
+        return spec["construir_texto"](datos_campos, fecha, usuario_slack)
     lineas = [
         f"*{spec['titulo_mensaje']}* {spec.get('emoji_mensaje', '')}",
         f"*Fecha:* {fecha}",
