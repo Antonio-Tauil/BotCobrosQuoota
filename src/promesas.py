@@ -45,6 +45,21 @@ def _medalla(posicion):
     return {1: "🥇", 2: "🥈", 3: "🥉"}.get(posicion, f"{posicion}.")
 
 
+# ============ ALERTA SI UN REPORTE FALLA (mismo helper que reportes.py — antes solo quedaba
+# en los logs de Railway, que nadie revisa a diario — ahora también llega un DM al supervisor,
+# igual que hace main.py con cualquier error de un comando/botón) ============
+def _avisar_falla_reporte(nombre_reporte, error):
+    try:
+        app.client.chat_postMessage(
+            channel=SUPERVISOR_ID,
+            text=(f"🔴 *Robotín: falló el reporte '{nombre_reporte}'*\n```{error}```\n"
+                  "Revisa los logs de Railway para más detalle.")
+        )
+    except Exception as e:
+        print(f"⚠️ No se pudo enviar la alerta de '{nombre_reporte}': {e}")
+# ============ FIN ALERTA SI UN REPORTE FALLA ============
+
+
 def _mencion_cobrador(nombre):
     clave = str(nombre).strip().upper()
     ids = COBRADOR_SLACK_IDS.get(clave)
@@ -225,6 +240,7 @@ def generar_resumen_promesas():
         print(f"✅ Radar publicado: {total_hoy} hoy, {total_venc} vencidas, {len(revisar)} por revisar")
     except Exception as e:
         print(f"❌ Error generando el resumen de promesas: {type(e).__name__}: {e}")
+        _avisar_falla_reporte("Radar de Promesas", e)
 
 
 # Comando manual para PROBAR el radar sin esperar a las 4 PM
@@ -398,6 +414,7 @@ def generar_cierre_diario():
         print(f"✅ Cierre diario publicado: {cantidad} cobros, ${total_usd:,.2f}")
     except Exception as e:
         print(f"❌ Error generando el cierre diario: {type(e).__name__}: {e}")
+        _avisar_falla_reporte("Cierre Diario", e)
 
 
 # Comando manual para probar el cierre sin esperar las 6 PM
