@@ -15,6 +15,70 @@ from validaciones import (
 FORM_SPECS = {}
 
 
+# ============ MÉTRICAS DE ACTIVIDAD DEL DÍA (para el resumen del Cierre Diario) ============
+# Cuenta, en memoria, cuántos formularios se ENVÍAN, APRUEBAN y RECHAZAN por comando cada
+# día — para poder mostrarle a gerencia un resumen de actividad (cuánto se registró vs.
+# cuánto quedó pendiente de revisar) sin tener que llevar la cuenta a mano. Se resetea solo
+# al cambiar de fecha (no hace falta borrar nada) y, si el bot se reinicia a mitad del día
+# (ej. un redeploy en Railway), el conteo de ese día vuelve a cero — es una limitación
+# conocida y aceptable para un contador de "actividad de hoy", no un registro contable
+# (para eso ya están las hojas de Google Sheets, que sí son la fuente de verdad del dinero).
+_METRICAS = {}
+
+# Nombres más amigables para comandos que no tienen "titulo_mensaje" en su ficha (ej. /cobro,
+# que es un formulario híbrido — ver cobros.py). Para el resto se usa spec["titulo_mensaje"].
+_ETIQUETAS_METRICAS = {"cobro": "Cobro"}
+
+
+def _registrar_metrica(nombre_spec, tipo):
+    """Suma 1 al contador de 'tipo' ('enviado'/'aprobado'/'rechazado') de 'nombre_spec' para
+    el día de hoy (hora Venezuela). Nunca lanza error: si algo falla, simplemente no cuenta
+    esa vez — no debe interrumpir el flujo real de aprobar/rechazar/publicar."""
+    try:
+        hoy = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y")
+        dia = _METRICAS.setdefault(hoy, {})
+        contador = dia.setdefault(nombre_spec, {"enviado": 0, "aprobado": 0, "rechazado": 0})
+        contador[tipo] = contador.get(tipo, 0) + 1
+    except Exception as e:
+        print(f"⚠️ No se pudo registrar la métrica ({nombre_spec}/{tipo}): {e}")
+
+
+def _resumen_metricas_hoy():
+    """Arma el texto del resumen de actividad de HOY (enviados/aprobados/rechazados/
+    pendientes, total y por comando) para agregar al Cierre Diario. Devuelve None si no hubo
+    ninguna actividad registrada hoy (ej. el bot se reinició después de la última actividad,
+    o de verdad no se usó ningún formulario)."""
+    hoy = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y")
+    dia = _METRICAS.get(hoy, {})
+    if not dia:
+        return None
+    total_enviados = sum(c.get("enviado", 0) for c in dia.values())
+    total_aprobados = sum(c.get("aprobado", 0) for c in dia.values())
+    total_rechazados = sum(c.get("rechazado", 0) for c in dia.values())
+    if total_enviados == 0 and total_aprobados == 0 and total_rechazados == 0:
+        return None
+    total_pendientes = max(0, total_enviados - total_aprobados - total_rechazados)
+    lineas = [
+        "📈 *Actividad de hoy:* "
+        f"{total_enviados} enviado(s) · {total_aprobados} aprobado(s) · "
+        f"{total_rechazados} rechazado(s) · {total_pendientes} pendiente(s) por revisar"
+    ]
+    comandos_activos = sorted(
+        ((nombre, c) for nombre, c in dia.items() if c.get("enviado", 0) > 0),
+        key=lambda kv: kv[1]["enviado"], reverse=True,
+    )
+    for nombre_spec, c in comandos_activos:
+        etiqueta = _ETIQUETAS_METRICAS.get(
+            nombre_spec, FORM_SPECS.get(nombre_spec, {}).get("titulo_mensaje", nombre_spec))
+        pendientes = max(0, c["enviado"] - c.get("aprobado", 0) - c.get("rechazado", 0))
+        lineas.append(
+            f"   • {etiqueta}: {c['enviado']} enviado(s), {c.get('aprobado', 0)} aprobado(s), "
+            f"{c.get('rechazado', 0)} rechazado(s), {pendientes} pendiente(s)"
+        )
+    return "\n".join(lineas)
+# ============ FIN MÉTRICAS DE ACTIVIDAD DEL DÍA ============
+
+
 def _valor_actual_bloque(valores_view, block_id):
     """Lee el valor RAW que tiene AHORA MISMO un campo del modal (tal como está en Slack en
     este instante) sin pasar por 'calcular' de la ficha. Se usa para repoblar un modal con lo
@@ -252,6 +316,7 @@ def _publicar_para_aprobacion(nombre_spec, body, client):
                 ]}
             ]
         )
+        _registrar_metrica(nombre_spec, "enviado")
     except Exception as e:
         print(f"⚠️ [{nombre_spec}] No se pudo enviar mensaje al canal: {e}")
 
@@ -265,6 +330,7 @@ def _aprobar_generico(nombre_spec, body, client):
         return
     if not _reservar_mensaje(body["message"]["ts"]):
         return  # alguien más ya está procesando este mismo clic (doble clic o dos personas a la vez)
+    _registrar_metrica(nombre_spec, "aprobado")
     fecha_revision = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y")
     meta = dict(body["message"].get("metadata", {}).get("event_payload", {}))
     fecha_original = meta.pop("_fecha", fecha_revision)
@@ -293,6 +359,7 @@ def _rechazar_generico(nombre_spec, body, client):
         return
     if not _reservar_mensaje(body["message"]["ts"]):
         return  # alguien más ya está procesando este mismo clic (doble clic o dos personas a la vez)
+    _registrar_metrica(nombre_spec, "rechazado")
     fecha_revision = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y")
     client.chat_update(
         channel=body["channel"]["id"], ts=body["message"]["ts"], text=f"{spec['titulo_mensaje']} RECHAZADO",
