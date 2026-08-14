@@ -460,6 +460,26 @@ def rechazar_merca_incidencia(ack, body, client):
 # Reporta incidencias operativas a nivel de departamento/área (sin datos individuales de
 # clientes ni empleados). Se guarda directo al enviar el formulario (sin aprobación) y se
 # publica en el canal de Incidencias, para que el equipo las revise y las resuelva.
+
+# ============ MENSAJE REDISEÑADO (mismo estilo que el resto de comandos rediseñados) ============
+def _texto_reportar_incidencia_v2(datos_campos, fecha, usuario_slack):
+    departamento = datos_campos.get("departamento", "")
+    tipo_incidencia = datos_campos.get("tipo_incidencia", "")
+    usuario_reporte = datos_campos.get("usuario_reporte", "")
+    descripcion = datos_campos.get("descripcion", "")
+    return (
+        f"🛠️ *Ticket interno — {tipo_incidencia}*\n"
+        f"*Departamento: {departamento}*\n"
+        f"\n"
+        f"──────────────────────────\n"
+        f"📅 *Fecha:* {fecha}\n"
+        f"👤 *Reportado por:* <@{usuario_slack}>\n"
+        f"🧑‍💻 *Usuario del Reporte:* {usuario_reporte}\n"
+        f"📝 *Descripción:* {descripcion}"
+    )
+# ============ FIN MENSAJE REDISEÑADO ============
+
+
 FORM_SPECS["reportar_incidencia"] = {
     "callback_id": "form_reportar_incidencia",
     "titulo": "Reportar Incidencia",
@@ -498,6 +518,7 @@ FORM_SPECS["reportar_incidencia"] = {
         ("Departamento", "departamento"), ("Tipo de Incidencia", "tipo_incidencia"),
         ("Usuario del Reporte", "usuario_reporte"), ("Descripción", "descripcion"),
     ],
+    "construir_texto": _texto_reportar_incidencia_v2,
 }
 
 
