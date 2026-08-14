@@ -24,8 +24,8 @@ from motor_formularios import (
     FORM_SPECS, _construir_blocks_formulario, _abrir_formulario_generico,
     _validar_formulario_generico, _extraer_valores_formulario, _guardar_generico,
     _construir_texto_mensaje, _ejecutar_formulario_generico, _publicar_para_aprobacion,
-    _aprobar_generico, _rechazar_generico, _valor_actual_bloque, _construir_handler_historial,
-    _registrar_metrica, _construir_handler_autocompletar,
+    _aprobar_generico, _rechazar_generico, _editar_generico, _valor_actual_bloque,
+    _construir_handler_historial, _registrar_metrica, _construir_handler_autocompletar,
 )
 
 
@@ -677,6 +677,12 @@ def rechazar_domiciliacion(ack, body, client):
     _rechazar_generico("domiciliar", body, client)
 
 
+@app.action("editar_domiciliacion")
+def editar_domiciliacion(ack, body, client):
+    ack()
+    _editar_generico("domiciliar", body, client)
+
+
 # Botón "Ver historial" (genérico — ver motor_formularios.py). Aquí busca por empresa
 # (no por cédula, ya que /domiciliar no maneja clientes individuales).
 _handler_historial_domiciliar = _construir_handler_historial(
@@ -836,6 +842,12 @@ def aprobar_cobro2(ack, body, client):
 def rechazar_cobro2(ack, body, client):
     ack()
     _rechazar_generico("cobro_callcenter", body, client)
+
+
+@app.action("editar_cobro2")
+def editar_cobro2(ack, body, client):
+    ack()
+    _editar_generico("cobro_callcenter", body, client)
 
 
 # Botón "Ver historial" (genérico — ver motor_formularios.py). Busca por cédula, y de paso
@@ -1022,6 +1034,12 @@ def rechazar_conciliacion(ack, body, client):
     _rechazar_generico("conciliar", body, client)
 
 
+@app.action("editar_conciliacion")
+def editar_conciliacion(ack, body, client):
+    ack()
+    _editar_generico("conciliar", body, client)
+
+
 # Botón "Ver historial" (genérico — ver motor_formularios.py). Busca por cédula, y de paso
 # rellena el nombre si ya se conoce al cliente (aquí el campo se llama "cliente", no "nombre",
 # y /conciliar no tiene campo de teléfono — de ahí el mapeo_autocompletar).
@@ -1181,6 +1199,12 @@ def rechazar_liquidacion_nueva(ack, body, client):
     _rechazar_generico("liquidacion_nueva", body, client)
 
 
+@app.action("editar_liquidacion_nueva")
+def editar_liquidacion_nueva(ack, body, client):
+    ack()
+    _editar_generico("liquidacion_nueva", body, client)
+
+
 # Botón "Ver historial" (genérico — ver motor_formularios.py). Busca por cédula; rellena
 # solo "nombre" (este formulario no tiene campo de teléfono).
 _handler_historial_liquidacion_nueva = _construir_handler_historial(
@@ -1308,6 +1332,12 @@ def aprobar_liquidacion_estatus(ack, body, client):
 def rechazar_liquidacion_estatus(ack, body, client):
     ack()
     _rechazar_generico("liquidacion_estatus", body, client)
+
+
+@app.action("editar_liquidacion_estatus")
+def editar_liquidacion_estatus(ack, body, client):
+    ack()
+    _editar_generico("liquidacion_estatus", body, client)
 
 
 # Botón "Buscar en Lista VIP" (rellena el nombre de referencia si la cédula ya está en la
@@ -1458,6 +1488,12 @@ def rechazar_comercial(ack, body, client):
     _rechazar_generico("cobro_comercial", body, client)
 
 
+@app.action("editar_comercial")
+def editar_comercial(ack, body, client):
+    ack()
+    _editar_generico("cobro_comercial", body, client)
+
+
 # Botón "Ver historial" (genérico — ver motor_formularios.py). Busca por cédula, y de paso
 # rellena nombre/teléfono si ya se conoce al cliente.
 _handler_historial_comercial = _construir_handler_historial(
@@ -1573,6 +1609,12 @@ def aprobar_contacto_legal(ack, body, client):
 def rechazar_contacto_legal(ack, body, client):
     ack()
     _rechazar_generico("contacto_legal", body, client)
+
+
+@app.action("editar_contacto_legal")
+def editar_contacto_legal(ack, body, client):
+    ack()
+    _editar_generico("contacto_legal", body, client)
 
 
 # Botón "Buscar cliente" (rellena nombre/teléfono si ya está registrado — sin historial,
