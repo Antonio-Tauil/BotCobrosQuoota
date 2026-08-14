@@ -79,6 +79,70 @@ def _resumen_metricas_hoy():
 # ============ FIN MÉTRICAS DE ACTIVIDAD DEL DÍA ============
 
 
+# ============ VIGILANTE DE REPORTES COLGADOS ============
+# Los 4 reportes automáticos (Radar 4PM, Cierre 6PM, Semanal lunes, Mensual día 1) ya
+# avisan por DM al supervisor si terminan con un ERROR (_avisar_falla_reporte). Pero si
+# uno se queda "colgado" (ej. Google Sheets nunca responde y el hilo se queda esperando
+# para siempre), no hay excepción que atrapar — el reporte simplemente nunca llega y nadie
+# se entera hasta que alguien pregunta "¿y el cierre de hoy?". Este vigilante lleva un
+# reloj en memoria de cuándo empezó y cuándo terminó cada reporte; un job aparte (en
+# scheduler.py) lo revisa cada cierto tiempo y avisa UNA SOLA VEZ si detecta que uno lleva
+# corriendo más de la cuenta. No puede "arreglar" el reporte colgado (Python no puede matar
+# de forma segura un hilo esperando por red) — es solo una alarma para que alguien revise
+# Railway y, si hace falta, reinicie el bot.
+_VIGILANCIA_REPORTES = {}
+
+
+def _marcar_inicio_reporte(nombre_reporte):
+    """Se llama al ARRANCAR un reporte automático. Nunca lanza error."""
+    try:
+        _VIGILANCIA_REPORTES[nombre_reporte] = {
+            "inicio": datetime.now(ZoneInfo("America/Caracas")),
+            "fin": None,
+            "alertado": False,
+        }
+    except Exception as e:
+        print(f"⚠️ No se pudo marcar el inicio de '{nombre_reporte}': {e}")
+
+
+def _marcar_fin_reporte(nombre_reporte):
+    """Se llama al TERMINAR un reporte automático (con éxito o con un error ya atrapado).
+    Si no se llega a llamar esto (el reporte se quedó colgado), el vigilante lo detecta."""
+    try:
+        estado = _VIGILANCIA_REPORTES.get(nombre_reporte)
+        if estado is not None:
+            estado["fin"] = datetime.now(ZoneInfo("America/Caracas"))
+            estado["alertado"] = False  # ya terminó bien: si vuelve a correr, puede alertar de nuevo
+    except Exception as e:
+        print(f"⚠️ No se pudo marcar el fin de '{nombre_reporte}': {e}")
+
+
+def _reportes_colgados(minutos_umbral=10):
+    """Devuelve la lista de nombres de reportes que empezaron y llevan más de
+    'minutos_umbral' minutos sin terminar, y que todavía no se les avisó al supervisor
+    (para no mandar el mismo aviso una y otra vez mientras sigue colgado). Marca esos
+    reportes como 'ya alertados' antes de devolverlos."""
+    colgados = []
+    try:
+        ahora = datetime.now(ZoneInfo("America/Caracas"))
+        for nombre_reporte, estado in _VIGILANCIA_REPORTES.items():
+            if estado.get("fin") is not None:
+                continue  # ya terminó
+            if estado.get("alertado"):
+                continue  # ya se avisó de este episodio colgado, no repetir
+            inicio = estado.get("inicio")
+            if inicio is None:
+                continue
+            minutos = (ahora - inicio).total_seconds() / 60
+            if minutos >= minutos_umbral:
+                estado["alertado"] = True
+                colgados.append((nombre_reporte, round(minutos)))
+    except Exception as e:
+        print(f"⚠️ El vigilante de reportes tuvo un problema revisando: {e}")
+    return colgados
+# ============ FIN VIGILANTE DE REPORTES COLGADOS ============
+
+
 def _valor_actual_bloque(valores_view, block_id):
     """Lee el valor RAW que tiene AHORA MISMO un campo del modal (tal como está en Slack en
     este instante) sin pasar por 'calcular' de la ficha. Se usa para repoblar un modal con lo
