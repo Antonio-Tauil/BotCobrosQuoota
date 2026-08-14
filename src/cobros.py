@@ -106,6 +106,42 @@ def _abrir_hoja_pagos_recibidos_cobro():
     return cliente.open_by_key(os.environ["SHEET_ID"]).worksheet("Pagos Recibidos")
 
 
+# ============ HISTORIAL RECIENTE DEL CLIENTE (contexto para quien aprueba) ============
+def _historial_reciente_cliente(sheet, cedula_digitos, maximo=3):
+    """Devuelve los últimos 'maximo' cobros anteriores de esta cédula en 'Pagos Recibidos'
+    (fecha y monto), para que quien aprueba tenga contexto sin tener que usar /buscar-cliente
+    por separado. Solo revisa esta hoja (no las 8 que revisa /buscar-cliente) a propósito:
+    es la que usa /cobro, y así no se agregan lecturas extra a Google Sheets en cada envío
+    del formulario. Nunca lanza error — si algo falla, simplemente no muestra historial."""
+    if not cedula_digitos or sheet is None:
+        return []
+    try:
+        col_cedula = _columna_por_nombre(sheet, "Cedula")
+        col_fecha = _columna_por_nombre(sheet, "Fecha")
+        col_monto_bs = _columna_por_nombre(sheet, "MontoBs")
+        col_monto_usd = _columna_por_nombre(sheet, "MontoUsd")
+        if col_cedula is None or col_fecha is None:
+            return []
+        idx_cedula, idx_fecha = col_cedula - 1, col_fecha - 1
+        idx_bs = (col_monto_bs - 1) if col_monto_bs else None
+        idx_usd = (col_monto_usd - 1) if col_monto_usd else None
+        coincidencias = []
+        for fila in sheet.get_all_values()[1:]:
+            if len(fila) > idx_cedula and _solo_digitos(fila[idx_cedula]) == cedula_digitos:
+                fecha = fila[idx_fecha] if len(fila) > idx_fecha else ""
+                montos = []
+                if idx_bs is not None and len(fila) > idx_bs and fila[idx_bs].strip():
+                    montos.append(fila[idx_bs].strip())
+                if idx_usd is not None and len(fila) > idx_usd and fila[idx_usd].strip():
+                    montos.append(fila[idx_usd].strip())
+                coincidencias.append((fecha, " / ".join(montos) if montos else "(sin monto)"))
+        return coincidencias[-maximo:]
+    except Exception as e:
+        print(f"⚠️ No se pudo obtener el historial del cliente: {e}")
+        return []
+# ============ FIN HISTORIAL RECIENTE DEL CLIENTE ============
+
+
 def guardar_en_sheet(fecha, cobrador, descripcion, numero, cedula, monto_bs, forma_pago, banco, tasa_bcv, monto_usd, registro_id=""):
     try:
         sheet = _abrir_hoja_pagos_recibidos_cobro()
@@ -262,6 +298,15 @@ def recibir_cobro(ack, body, client):
             "deny": {"type": "plain_text", "text": "Cancelar"},
         }
     # ============ FIN AVISO DE POSIBLE DUPLICADO ============
+
+    # ============ HISTORIAL RECIENTE DEL CLIENTE ============
+    # Se agrega abajo del mensaje, como contexto extra para quien aprueba — no cambia nada
+    # de lo que ya se guarda ni de cómo se aprueba/rechaza el cobro.
+    historial = _historial_reciente_cliente(sheet_dup, _solo_digitos(cedula))
+    if historial:
+        lineas_historial = "\n".join(f"   • {f} — {m}" for f, m in historial)
+        texto += f"\n\n📜 *Historial reciente de este cliente ({len(historial)}):*\n{lineas_historial}"
+    # ============ FIN HISTORIAL RECIENTE DEL CLIENTE ============
 
     client.chat_postMessage(
         channel="#cobranzas-log",
