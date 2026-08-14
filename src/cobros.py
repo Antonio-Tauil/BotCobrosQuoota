@@ -752,6 +752,40 @@ def _calcular_conciliacion(datos):
     }
 
 
+# ============ MENSAJE REDISEÑADO (mismo estilo que /cobro, /merca-reporte, /contactar y
+# /domiciliar). Aquí no hay un monto en $ que resaltar — lo que más le importa a quien revisa
+# es el ESTADO de la conciliación (Conciliado / Con diferencia / Revisar manualmente), así que
+# ese va arriba en el resumen, junto con el cliente y la cédula en negrita. ============
+def _texto_conciliar_v2(datos_campos, fecha, usuario_slack):
+    cliente = datos_campos.get("cliente", "")
+    cedula = datos_campos.get("cedula", "")
+    referencia = datos_campos.get("referencia", "")
+    banco = datos_campos.get("banco", "")
+    monto_reportado = datos_campos.get("monto_reportado", "")
+    monto_banco = datos_campos.get("monto_banco", "")
+    diferencia = datos_campos.get("diferencia", "")
+    estado_mostrado = datos_campos.get("estado_mostrado", "")
+    fecha_movimiento = datos_campos.get("fecha_movimiento", "")
+    conciliador = datos_campos.get("conciliador", "")
+    observaciones = datos_campos.get("observaciones", "")
+    texto = (
+        f"🧾 *Conciliación — {estado_mostrado}*\n"
+        f"*{cliente} · Cédula {cedula}*\n"
+        f"\n"
+        f"──────────────────────────\n"
+        f"📅 *Fecha movimiento banco:* {fecha_movimiento}\n"
+        f"👤 *Conciliador:* {conciliador} (<@{usuario_slack}>)\n"
+        f"🏦 *Banco:* {banco}\n"
+        f"🔖 *N° Referencia:* {referencia}\n"
+        f"💵 *Reportado:* {monto_reportado}  ·  *Según banco:* {monto_banco}\n"
+        f"⚖️ *Diferencia:* {diferencia}"
+    )
+    if observaciones:
+        texto += f"\n📝 *Observaciones:* {observaciones}"
+    return texto
+# ============ FIN MENSAJE REDISEÑADO ============
+
+
 FORM_SPECS["conciliar"] = {
     "callback_id": "form_conciliar",
     "titulo": "Conciliar Pago",
@@ -802,6 +836,7 @@ FORM_SPECS["conciliar"] = {
         ("Fecha movimiento banco", "fecha_movimiento"), ("Conciliador", "conciliador"),
         ("Observaciones", "observaciones"),
     ],
+    "construir_texto": _texto_conciliar_v2,
 }
 
 
