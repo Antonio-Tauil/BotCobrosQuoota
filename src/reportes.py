@@ -27,7 +27,7 @@ from google.oauth2.service_account import Credentials
 
 from config import app, SHEET_ID_MERCADEO, CANAL_CIERRE, CANAL_MERCADEO_PAGOS, CANAL_REPORTES_MENSUALES, SUPERVISOR_ID
 from validaciones import parse_numero, _columna_por_nombre
-from motor_formularios import FORM_SPECS
+from motor_formularios import FORM_SPECS, _marcar_inicio_reporte, _marcar_fin_reporte, _reportes_colgados
 from cobros import _abrir_hoja_domiciliacion, _abrir_hoja_cobro2, _abrir_hoja_conciliacion, _abrir_hoja_comercial
 from mercadeo import _abrir_hoja_mercadeo
 
@@ -118,6 +118,31 @@ def _avisar_falla_reporte(nombre_reporte, error):
     except Exception as e:
         print(f"⚠️ No se pudo enviar la alerta de '{nombre_reporte}': {e}")
 # ============ FIN ALERTA SI UN REPORTE FALLA ============
+
+
+# ============ VIGILANTE DE REPORTES COLGADOS (revisa el reloj de motor_formularios.py) ============
+# Se programa en scheduler.py para correr cada cierto tiempo (ej. cada 20-30 min). Si algún
+# reporte automático empezó y todavía no ha terminado después de 'umbral' minutos (mucho más
+# de lo que tarda normalmente, que es cuestión de segundos), avisa al supervisor UNA SOLA VEZ
+# por episodio colgado — no puede arreglarlo, solo es una alarma para revisar Railway.
+def revisar_reportes_colgados(umbral_minutos=10):
+    try:
+        colgados = _reportes_colgados(minutos_umbral=umbral_minutos)
+        for nombre_reporte, minutos in colgados:
+            try:
+                app.client.chat_postMessage(
+                    channel=SUPERVISOR_ID,
+                    text=(f"🔴 *Robotín: el reporte '{nombre_reporte}' lleva {minutos} minuto(s) "
+                          "corriendo sin terminar — podría estar colgado.*\n"
+                          "Revisa los logs de Railway; si sigue así, probablemente haga falta "
+                          "reiniciar el bot.")
+                )
+                print(f"🔴 Vigilante: '{nombre_reporte}' parece colgado ({minutos} min).")
+            except Exception as e:
+                print(f"⚠️ No se pudo enviar la alerta de reporte colgado ('{nombre_reporte}'): {e}")
+    except Exception as e:
+        print(f"⚠️ El vigilante de reportes colgados tuvo un problema: {e}")
+# ============ FIN VIGILANTE DE REPORTES COLGADOS ============
 
 
 def _sumar_area(ws, col_fecha, col_monto_bs, col_monto_usd, col_persona, lunes, domingo):
@@ -233,6 +258,7 @@ def generar_reportes_semanales():
     área que maneja pagos, y lo publica en el canal de esa misma área. Cada área se
     procesa por separado (con su propio try/except) para que un problema en una no
     impida que las demás se publiquen."""
+    _marcar_inicio_reporte("Reporte Semanal")
     lunes_pasado, domingo_pasado = _rango_semana_pasada()
 
     try:
@@ -295,6 +321,7 @@ def generar_reportes_semanales():
         _avisar_falla_reporte("Reporte semanal — Mercadeo", e)
 
     print("✅ Reportes semanales generados.")
+    _marcar_fin_reporte("Reporte Semanal")
 
 
 # Comando manual para probar los reportes sin esperar al lunes
@@ -405,6 +432,7 @@ def generar_reportes_mensuales():
     terminar para cada área, lo compara contra el mes anterior a ese, y publica los 5
     juntos en CANAL_REPORTES_MENSUALES (para que gerencia los vea todos en un solo lugar).
     Cada área se procesa por separado para que un problema en una no impida las demás."""
+    _marcar_inicio_reporte("Reporte Mensual")
     inicio_mes, fin_mes = _rango_mes_pasado()
     inicio_mes_ant, fin_mes_ant = _rango_mes_anterior_a(inicio_mes)
 
@@ -430,6 +458,7 @@ def generar_reportes_mensuales():
             _avisar_falla_reporte(f"Reporte mensual — {titulo}", e)
 
     print("✅ Reportes mensuales generados.")
+    _marcar_fin_reporte("Reporte Mensual")
 
 
 # Comando manual para probar el reporte mensual sin esperar al día 1
