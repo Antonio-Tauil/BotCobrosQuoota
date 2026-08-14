@@ -25,6 +25,7 @@ from motor_formularios import (
     _validar_formulario_generico, _extraer_valores_formulario, _guardar_generico,
     _construir_texto_mensaje, _ejecutar_formulario_generico, _publicar_para_aprobacion,
     _aprobar_generico, _rechazar_generico, _valor_actual_bloque, _construir_handler_historial,
+    _registrar_metrica,
 )
 
 # ============ NUEVO COMANDO /contactar (migrado al Motor Genérico - Fase 3) ============
@@ -398,6 +399,7 @@ def recibir_cobro(ack, body, client):
             ]}
         ]
     )
+    _registrar_metrica("cobro", "enviado")
 
 
 @app.action("aprobar")
@@ -408,6 +410,7 @@ def aprobar(ack, body, client):
         return
     if not _reservar_mensaje(body["message"]["ts"]):
         return  # alguien más ya está procesando este mismo clic (doble clic o dos personas a la vez)
+    _registrar_metrica("cobro", "aprobado")
     fecha_revision = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y")
     registro_id = _id_amigable("COBRO", body["message"]["ts"])
     resultado = "ERROR"
@@ -438,6 +441,7 @@ def rechazar(ack, body, client):
         return
     if not _reservar_mensaje(body["message"]["ts"]):
         return  # alguien más ya está procesando este mismo clic (doble clic o dos personas a la vez)
+    _registrar_metrica("cobro", "rechazado")
     fecha_revision = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y")
     client.chat_update(
         channel=body["channel"]["id"], ts=body["message"]["ts"], text="Cobro RECHAZADO",
