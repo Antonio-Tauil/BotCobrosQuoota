@@ -39,6 +39,12 @@ COBRADOR_SLACK_IDS = {
 RADAR_RANGO_DIAS = 90
 
 
+def _medalla(posicion):
+    """1->🥇, 2->🥈, 3->🥉, el resto->'4.', '5.', etc. — mismo helper que usa reportes.py
+    para los rankings por persona (Cierre Diario aquí, semanal/mensual allá)."""
+    return {1: "🥇", 2: "🥈", 3: "🥉"}.get(posicion, f"{posicion}.")
+
+
 def _mencion_cobrador(nombre):
     clave = str(nombre).strip().upper()
     ids = COBRADOR_SLACK_IDS.get(clave)
@@ -147,10 +153,19 @@ def generar_resumen_promesas():
             # (futuras dentro de rango: no se listan hoy)
 
         # ---- Armar el mensaje ----
+        # ============ MENSAJE REDISEÑADO (mismo estilo del resto del bot: resumen arriba con
+        # lo más urgente + línea divisoria consistente con los demás mensajes) ============
+        if total_venc > 0:
+            resumen_titular = f"{total_venc} vencida(s) requieren atención"
+        elif total_hoy > 0:
+            resumen_titular = f"{total_hoy} para hoy"
+        else:
+            resumen_titular = "todo al día"
         lineas = []
-        lineas.append(f"📅 *RADAR DE PROMESAS DE PAGO*  ·  {hoy_txt}")
-        lineas.append(f"Resumen: *{total_hoy}* para hoy · *{total_venc}* vencidas · *{len(revisar)}* por revisar")
-        lineas.append("━━━━━━━━━━━━━━━━━━━━")
+        lineas.append(f"📅 *Radar de Promesas — {resumen_titular}*")
+        lineas.append(f"{hoy_txt} · {total_hoy} para hoy · {total_venc} vencidas · {len(revisar)} por revisar")
+        lineas.append("──────────────────────────")
+        # ============ FIN MENSAJE REDISEÑADO (encabezado del radar) ============
 
         if not por_cobrador:
             lineas.append("")
@@ -362,8 +377,9 @@ def generar_cierre_diario():
             g["usd"] += usd
             g["bs"] += bs
 
-        # Armar el mensaje
-        lineas = [f"📊 *CIERRE DEL DÍA — {hoy_txt}*", ""]
+        # ============ MENSAJE REDISEÑADO (mismo estilo del resto del bot: línea divisoria
+        # consistente, y ranking con medallas para el top de cobradores del día) ============
+        lineas = [f"📊 *Cierre del día — {hoy_txt}*", "──────────────────────────"]
         if cantidad == 0:
             lineas.append("No se registraron cobros hoy.")
         else:
@@ -371,9 +387,11 @@ def generar_cierre_diario():
             lineas.append(f"📝 *Cantidad de cobros:* {cantidad}")
             lineas.append("")
             lineas.append("*Por cobrador:*")
-            for clave in sorted(por_cobrador.keys(), key=lambda x: por_cobrador[x]["usd"], reverse=True):
+            ranking = sorted(por_cobrador.keys(), key=lambda x: por_cobrador[x]["usd"], reverse=True)
+            for posicion, clave in enumerate(ranking, 1):
                 g = por_cobrador[clave]
-                lineas.append(f"   • {g['nombre']} — {g['n']} cobro(s) — ${g['usd']:,.2f}")
+                lineas.append(f"   {_medalla(posicion)} {g['nombre']} — {g['n']} cobro(s) — ${g['usd']:,.2f}")
+        # ============ FIN MENSAJE REDISEÑADO (cierre diario) ============
 
         mensaje = "\n".join(lineas)
         app.client.chat_postMessage(channel=CANAL_CIERRE, text=mensaje)
