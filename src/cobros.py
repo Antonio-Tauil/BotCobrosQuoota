@@ -26,7 +26,8 @@ from motor_formularios import (
     _construir_texto_mensaje, _ejecutar_formulario_generico, _publicar_para_aprobacion,
     _aprobar_generico, _rechazar_generico, _editar_generico, _valor_actual_bloque,
     _construir_handler_historial, _registrar_metrica, _construir_handler_autocompletar,
-    _valores_view_desde_metadata,
+    _valores_view_desde_metadata, _registrar_aprobacion_para_deshacer, _ejecutar_deshacer,
+    _ultima_aprobacion_deshacible, _ULTIMAS_APROBACIONES, _DESHACER_VENTANA_MINUTOS,
 )
 
 
@@ -528,6 +529,20 @@ def aprobar(ack, body, client):
         encabezado = f"⚠️ *YA REGISTRADO* — este cobro ya estaba guardado, no se duplicó. Revisado por <@{body['user']['id']}> el {fecha_revision}"
     else:
         encabezado = f"✅ *APROBADO* por <@{body['user']['id']}> el {fecha_revision}"
+        if resultado == "OK":
+            _blocks_msg = body["message"].get("blocks", [])
+            _registrar_aprobacion_para_deshacer({
+                "abrir_hoja": _abrir_hoja_pagos_recibidos_cobro,
+                "columna_id_registro": "ID Registro",
+                "registro_id": registro_id,
+                "canal": body["channel"]["id"],
+                "ts": body["message"]["ts"],
+                "texto_original": texto_original,
+                "blocks_accion_original": _blocks_msg[1] if len(_blocks_msg) > 1
+                    else {"type": "actions", "elements": []},
+                "aprobado_por": body["user"]["id"],
+                "resumen": "Cobro",
+            })
     client.chat_update(
         channel=body["channel"]["id"], ts=body["message"]["ts"], text="Cobro procesado",
         blocks=[{"type": "section", "text": {"type": "mrkdwn", "text": f"{encabezado}\n\n{texto_original}"}}]
@@ -2059,6 +2074,67 @@ def buscar_cliente(ack, body, client):
 
 
 # Conexión propia para la búsqueda (usa el mismo patrón del resto del bot)
+
+
+# ============ COMANDO "/deshacer" (revertir la ÚLTIMA aprobación) ============
+# Ver motor_formularios.py para la lógica compartida (_ejecutar_deshacer, etc.) — este
+# comando solo arma la confirmación (con botones) y la muestra, para que nadie deshaga algo
+# sin querer con un solo clic. La confirmación se manda como mensaje efímero (solo la ve quien
+# corrió el comando) y se actualiza con 'respond' (vía 'response_url'), que es la forma
+# correcta de editar un mensaje efímero — a diferencia de los mensajes normales del canal,
+# 'chat_update' no funciona con estos.
+@app.command("/deshacer")
+def deshacer_comando(ack, body, client):
+    ack()
+    canal = body["channel_id"]
+    usuario = body["user_id"]
+    entry, minutos = _ultima_aprobacion_deshacible()
+    if entry is None:
+        if _ULTIMAS_APROBACIONES:
+            client.chat_postEphemeral(
+                channel=canal, user=usuario,
+                text=(f"⚠️ La última aprobación ya pasó de los {_DESHACER_VENTANA_MINUTOS} minutos — "
+                      "ya no se puede deshacer automáticamente. Corrígelo directamente en el Sheet si hace falta."))
+        else:
+            client.chat_postEphemeral(channel=canal, user=usuario,
+                text="No hay ninguna aprobación reciente para deshacer.")
+        return
+    client.chat_postEphemeral(
+        channel=canal, user=usuario,
+        text="¿Deshacer la última aprobación?",
+        blocks=[
+            {"type": "section", "text": {"type": "mrkdwn", "text": (
+                f"↩️ *¿Deshacer la última aprobación?*\n\n"
+                f"*{entry.get('resumen', '')}* — aprobado hace {minutos} min por <@{entry['aprobado_por']}>.\n\n"
+                "Esto anula el registro en el Sheet (sin borrar la fila — solo se marca como "
+                "anulado) y deja el mensaje pendiente de nuevo, con sus botones de Aprobar/"
+                "Rechazar/Editar de vuelta.")}},
+            {"type": "actions", "elements": [
+                {"type": "button", "text": {"type": "plain_text", "text": "↩️ Sí, deshacer"}, "style": "danger",
+                 "action_id": "confirmar_deshacer", "value": json.dumps({"registro_id": entry.get("registro_id", "")})},
+                {"type": "button", "text": {"type": "plain_text", "text": "Cancelar"}, "action_id": "cancelar_deshacer"},
+            ]}
+        ]
+    )
+
+
+@app.action("confirmar_deshacer")
+def confirmar_deshacer(ack, body, client, respond):
+    ack()
+    usuario = body["user"]["id"]
+    try:
+        registro_id_esperado = json.loads(body["actions"][0].get("value") or "{}").get("registro_id") or None
+    except Exception:
+        registro_id_esperado = None
+    resultado_texto = _ejecutar_deshacer(client, usuario, registro_id_esperado)
+    respond(text=resultado_texto, replace_original=True)
+
+
+@app.action("cancelar_deshacer")
+def cancelar_deshacer(ack, body, client, respond):
+    ack()
+    respond(text="Cancelado — no se deshizo nada.", replace_original=True)
+# ============ FIN COMANDO "/deshacer" ============
 
 
 # ============ TASA DEL DÍA (una vez al día) — BLINDADO ============
