@@ -14,6 +14,7 @@ from config import (
     app, SHEET_ID_COBRO2, SHEET_ID_LIQUIDACIONES, SHEET_ID_COMERCIAL, SHEET_ID_LEGAL,
     SHEET_ID_ESCALADOS, CANAL_LIQUIDACIONES, CANAL_COMERCIAL, CANAL_LEGAL, CANAL_ESCALADOS,
     PESTANA_INDICADORES, PESTANA_HISTORIAL_TASAS, _opciones_cobradores, get_cliente_busqueda,
+    SUPERVISOR_ID,
 )
 from validaciones import (
     _normalizar_encabezado, _guardar_fila_por_encabezado, _columna_por_nombre,
@@ -2436,6 +2437,40 @@ def _tasa_de_hoy():
     except Exception as e:
         print(f"⚠️ Tasa: error en _tasa_de_hoy: {type(e).__name__}: {e}")
         return None
+
+
+# ============ RECORDATORIO: TASA BCV DEL DÍA SIN FIJAR ============
+# Se programa en scheduler.py para correr un par de veces en la mañana. Antes, la única
+# forma de enterarse de que nadie había fijado la tasa de hoy era toparse con el error al
+# reportar un cobro (ver 'recibir_cobro' más arriba: "⚠️ Falta la tasa de hoy"). Con esto,
+# el supervisor se entera ANTES de que eso pase. Es solo un aviso — no fija nada ni bloquea
+# el bot, y nunca lanza error (si algo falla revisando, simplemente no manda el aviso).
+def revisar_tasa_del_dia():
+    try:
+        if _tasa_de_hoy() is not None:
+            return  # ya está fijada, no hay nada que avisar
+        hoy_txt = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y")
+        app.client.chat_postMessage(
+            channel=SUPERVISOR_ID,
+            text=(f"⏰ *Todavía no se ha fijado la Tasa BCV de hoy ({hoy_txt}).*\n"
+                  "Fíjala con `/tasa-hoy [valor]` antes de que alguien intente reportar un cobro "
+                  "y le salga el error de 'Falta la tasa de hoy'.")
+        )
+        print(f"⏰ Recordatorio: la tasa BCV de hoy ({hoy_txt}) todavía no está fijada.")
+    except Exception as e:
+        print(f"⚠️ No se pudo revisar/avisar sobre la tasa del día: {e}")
+
+
+# Comando manual para probar el recordatorio sin esperar a las 9:30 AM / 12:00 PM
+@app.command("/probar-recordatorio-tasa")
+def probar_recordatorio_tasa(ack, body, client):
+    ack()
+    client.chat_postEphemeral(
+        channel=body["channel_id"], user=body["user_id"],
+        text="⏳ Revisando si ya se fijó la tasa de hoy... si falta, le llega un DM a Leandro."
+    )
+    revisar_tasa_del_dia()
+# ============ FIN RECORDATORIO: TASA BCV DEL DÍA SIN FIJAR ============
 
 
 @app.command("/tasa-hoy")
