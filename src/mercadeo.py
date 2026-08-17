@@ -17,6 +17,9 @@ from validaciones import (
     _id_amigable, _ya_procesado, parse_numero, _validar_view, _reservar_mensaje,
 )
 from motor_formularios import FORM_SPECS, _abrir_formulario_generico, _validar_formulario_generico, _ejecutar_formulario_generico
+# _tasa_de_pago: para comparar la Tasa BCV que la persona escribe a mano en este formulario
+# contra la tasa OFICIAL de la fecha del pago (ver el aviso de typo de tasa, más abajo).
+from cobros import _tasa_de_pago, TASA_CAMBIO_ALERTA
 
 
 # ============ MÓDULO DE MERCADEO (Conciliación de Pagos e Incidencias Técnicas) ============
@@ -296,6 +299,39 @@ def recibir_conciliacion_mercadeo(ack, body, client):
         f"📅 *Fecha de Pago:* {fecha_pago}\n"
         f"🔖 *Número de Referencia:* {referencia}"
     )
+
+    # ============ AVISO DE POSIBLE ERROR EN LA TASA BCV (dato tecleado a mano) ============
+    # Este campo se escribe a mano (no viene de /tasa-hoy), así que un typo (un cero de más,
+    # una coma corrida) no lo agarra ninguna validación de formato — el Monto en USD calculado
+    # queda con un valor absurdo (ej. $0.03 en vez de $26) sin que nadie se dé cuenta hasta
+    # revisar el Sheet a mano. Se compara contra la tasa OFICIAL de la Fecha de Pago (no la de
+    # hoy — la conciliación casi siempre se hace días después del pago real). Usa el emoji 💱
+    # (no ✅/❌/⚠), por la misma razón que el aviso de duplicado usa 🔁 en el resto del bot.
+    boton_aprobar = {"type": "button", "text": {"type": "plain_text", "text": "✅ Aprobar"}, "style": "primary",
+                     "action_id": "aprobar_merca_conciliacion"}
+    if tasa_bcv_num:
+        try:
+            tasa_oficial_num = _tasa_de_pago(fecha_pago, fecha_reporte)
+            tasa_oficial_num = float(tasa_oficial_num) if tasa_oficial_num else None
+        except Exception as e:
+            tasa_oficial_num = None
+            print(f"⚠️ [merca-conciliacion] No se pudo comparar contra la tasa oficial: {e}")
+        if tasa_oficial_num:
+            cambio = abs(tasa_bcv_num - tasa_oficial_num) / tasa_oficial_num
+            if cambio > TASA_CAMBIO_ALERTA:
+                texto = (f"💱 *POSIBLE ERROR EN LA TASA BCV* — escribiste Bs. {tasa_bcv_num:,.4f} pero la tasa "
+                         f"oficial para el {fecha_pago} es Bs. {tasa_oficial_num:,.4f} (una diferencia de "
+                         f"{cambio * 100:,.0f}%). Revisa que no se te haya colado un dígito de más o de menos.\n\n"
+                         + texto)
+                boton_aprobar["confirm"] = {
+                    "title": {"type": "plain_text", "text": "Confirmar tasa fuera de rango"},
+                    "text": {"type": "mrkdwn", "text": (
+                        f"La tasa escrita (Bs. {tasa_bcv_num:,.4f}) difiere mucho de la oficial del "
+                        f"{fecha_pago} (Bs. {tasa_oficial_num:,.4f}). ¿Aprobar de todas formas?")},
+                    "confirm": {"type": "plain_text", "text": "Sí, aprobar de todas formas"},
+                    "deny": {"type": "plain_text", "text": "Cancelar"},
+                }
+    # ============ FIN AVISO DE POSIBLE ERROR EN LA TASA BCV ============
     # ============ FIN MENSAJE REDISEÑADO ============
     try:
         client.chat_postMessage(
@@ -309,7 +345,7 @@ def recibir_conciliacion_mercadeo(ack, body, client):
             blocks=[
                 {"type": "section", "text": {"type": "mrkdwn", "text": texto}},
                 {"type": "actions", "elements": [
-                    {"type": "button", "text": {"type": "plain_text", "text": "✅ Aprobar"}, "style": "primary", "action_id": "aprobar_merca_conciliacion"},
+                    boton_aprobar,
                     {"type": "button", "text": {"type": "plain_text", "text": "❌ Rechazar"}, "style": "danger", "action_id": "rechazar_merca_conciliacion"}
                 ]}
             ]
