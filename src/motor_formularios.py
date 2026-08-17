@@ -459,6 +459,22 @@ def _aprobar_generico(nombre_spec, body, client):
         encabezado = f"⚠️ *YA REGISTRADO* — ya estaba guardado, no se duplicó. Revisado por <@{body['user']['id']}> el {fecha_revision}"
     elif resultado == "OK":
         encabezado = f"✅ *APROBADO* por <@{body['user']['id']}> el {fecha_revision}"
+        # Solo si de verdad se guardó una fila nueva (y tiene un "ID Registro" con el que
+        # encontrarla después) queda algo que "/deshacer" pueda anular.
+        if registro_id:
+            _blocks_msg = body["message"].get("blocks", [])
+            _registrar_aprobacion_para_deshacer({
+                "abrir_hoja": spec["abrir_hoja"],
+                "columna_id_registro": spec.get("columna_id_registro", "ID Registro"),
+                "registro_id": registro_id,
+                "canal": body["channel"]["id"],
+                "ts": body["message"]["ts"],
+                "texto_original": texto_original,
+                "blocks_accion_original": _blocks_msg[1] if len(_blocks_msg) > 1
+                    else {"type": "actions", "elements": []},
+                "aprobado_por": body["user"]["id"],
+                "resumen": spec.get("titulo_mensaje", nombre_spec),
+            })
     else:
         encabezado = f"⚠️ *APROBADO pero hubo error guardando (revisar logs)* por <@{body['user']['id']}> el {fecha_revision}"
     client.chat_update(
@@ -612,6 +628,119 @@ def _recibir_edicion_generico(ack, body, client):
     except Exception as e:
         print(f"⚠️ [{nombre_spec}] Error guardando la corrección: {e}")
 # ============ FIN BOTÓN "✏️ Editar" ANTES DE APROBAR ============
+
+
+# ============ COMANDO "/deshacer" (revertir la ÚLTIMA aprobación, dentro de una ventana corta) ============
+# Objetivo: si alguien aprueba un cobro/domiciliación/etc. por error (o con un dato que nadie
+# notó a tiempo), poder revertirlo SIN tener que ir a corregir el Sheet a mano. Por seguridad,
+# a propósito NO se puede deshacer cualquier aprobación del historial — solo la MÁS RECIENTE, y
+# solo dentro de los primeros minutos (ver _DESHACER_VENTANA_MINUTOS): pasado ese tiempo, es más
+# probable que ese registro ya se haya usado en un reporte o conciliación, y deshacerlo en
+# silencio generaría más confusión que la que resuelve. El registro en el Sheet NUNCA se borra:
+# solo se le antepone "ANULADO-" a su "ID Registro", así el dato completo sigue ahí como
+# evidencia de que existió y fue anulado — nada se destruye. El mensaje de Slack vuelve a su
+# estado pendiente (con los mismos botones que tenía antes) para poder corregirlo y volver a
+# aprobar, o rechazarlo directamente. NO cubre /liquidacion-estatus: ese comando no crea una
+# fila nueva, actualiza el estatus de una ya existente — deshacer eso necesitaría guardar el
+# estatus ANTERIOR, que es un mecanismo distinto y queda fuera de este alcance por ahora.
+_ULTIMAS_APROBACIONES = []  # pila: la más reciente al final (solo se puede deshacer esa)
+_DESHACER_VENTANA_MINUTOS = 30
+_DESHACER_MAX_GUARDADAS = 20
+
+
+def _registrar_aprobacion_para_deshacer(entry):
+    """Guarda una aprobación reciente en la pila de 'deshacer'. 'entry' debe traer: abrir_hoja
+    (callable que abre la hoja donde se guardó), columna_id_registro, registro_id, canal, ts,
+    texto_original (el texto de ANTES de que se marcara aprobado, para poder restaurarlo),
+    blocks_accion_original (el bloque 'actions' original, con los mismos botones de
+    siempre — se reutiliza tal cual, así no hace falta reconstruirlo comando por comando),
+    aprobado_por (quién lo aprobó) y resumen (una descripción corta para mostrar en la
+    confirmación de /deshacer). Nunca lanza error."""
+    try:
+        entry = dict(entry)
+        entry["momento"] = datetime.now(ZoneInfo("America/Caracas"))
+        _ULTIMAS_APROBACIONES.append(entry)
+        if len(_ULTIMAS_APROBACIONES) > _DESHACER_MAX_GUARDADAS:
+            _ULTIMAS_APROBACIONES.pop(0)
+    except Exception as e:
+        print(f"⚠️ No se pudo registrar la aprobación para poder deshacerla: {e}")
+
+
+def _ultima_aprobacion_deshacible():
+    """Devuelve (entry, minutos_transcurridos) de la ÚLTIMA aprobación SI todavía está dentro
+    de la ventana de tiempo para deshacer, o (None, None) si no hay ninguna o ya se pasó del
+    tiempo permitido."""
+    if not _ULTIMAS_APROBACIONES:
+        return None, None
+    entry = _ULTIMAS_APROBACIONES[-1]
+    minutos = (datetime.now(ZoneInfo("America/Caracas")) - entry["momento"]).total_seconds() / 60
+    if minutos > _DESHACER_VENTANA_MINUTOS:
+        return None, None
+    return entry, round(minutos)
+
+
+def _anular_registro_por_id(abrir_hoja, columna_id_registro, registro_id):
+    """Busca 'registro_id' en la columna 'columna_id_registro' de la hoja que abre
+    'abrir_hoja()', y le antepone 'ANULADO-' — SIN borrar la fila (todo el resto del registro
+    queda intacto, visible en el Sheet, como evidencia de que existió y fue anulado). Devuelve
+    True si lo encontró y lo marcó, False si no lo encontró o algo falló (nunca lanza error)."""
+    try:
+        sheet = abrir_hoja()
+        if sheet is None or not registro_id:
+            return False
+        col = _columna_por_nombre(sheet, columna_id_registro)
+        if col is None:
+            return False
+        objetivo = str(registro_id).strip()
+        valores = sheet.get_all_values()
+        for i, fila in enumerate(valores[1:], start=2):  # fila 1 = encabezados
+            if len(fila) >= col and str(fila[col - 1]).strip() == objetivo:
+                sheet.update_cell(i, col, f"ANULADO-{objetivo}")
+                return True
+        return False
+    except Exception as e:
+        print(f"⚠️ No se pudo anular el registro '{registro_id}': {e}")
+        return False
+
+
+def _ejecutar_deshacer(client, quien_deshace, registro_id_esperado=None):
+    """Ejecuta el deshacer de la ÚLTIMA aprobación (si sigue disponible y dentro de la
+    ventana de tiempo): anula el registro en el Sheet y regresa el mensaje de Slack a su
+    estado pendiente. 'registro_id_esperado' (opcional) protege contra la carrera de que,
+    entre que se mostró la confirmación de /deshacer y que alguien la apretó, se haya
+    aprobado algo MÁS reciente — si el tope de la pila cambió, no deshace nada a ciegas y
+    avisa que hay que volver a correr /deshacer. Devuelve el texto para confirmarle a quien
+    corrió /deshacer qué pasó."""
+    entry, minutos = _ultima_aprobacion_deshacible()
+    if entry is None:
+        if _ULTIMAS_APROBACIONES:
+            return (f"⚠️ La última aprobación ya pasó de los {_DESHACER_VENTANA_MINUTOS} minutos "
+                     "— ya no se puede deshacer automáticamente. Corrígelo directamente en el Sheet si hace falta.")
+        return "No hay ninguna aprobación reciente para deshacer."
+    if registro_id_esperado and entry.get("registro_id") != registro_id_esperado:
+        return ("⚠️ Mientras tanto se aprobó algo más reciente — corre `/deshacer` de nuevo si quieres "
+                "deshacer ESA aprobación (ya no la que habías visto antes).")
+    _ULTIMAS_APROBACIONES.pop()  # se consume: no se puede deshacer dos veces lo mismo
+    anulado = _anular_registro_por_id(entry["abrir_hoja"], entry["columna_id_registro"], entry["registro_id"])
+    aviso = (f"↩️ *DESHECHO por <@{quien_deshace}>* — la aprobación de <@{entry['aprobado_por']}> quedó anulada.\n\n"
+             f"{entry['texto_original']}")
+    try:
+        client.chat_update(
+            channel=entry["canal"], ts=entry["ts"], text="Pendiente de nuevo (aprobación deshecha)",
+            blocks=[
+                {"type": "section", "text": {"type": "mrkdwn", "text": aviso}},
+                entry["blocks_accion_original"],
+            ]
+        )
+    except Exception as e:
+        print(f"⚠️ [deshacer] No se pudo actualizar el mensaje en Slack: {e}")
+    if not anulado:
+        return (f"⚠️ Deshice *{entry.get('resumen', '')}* en Slack (el mensaje vuelve a estar pendiente), "
+                "pero NO pude anular el registro en el Sheet — revísalo a mano si ya se había guardado.")
+    return (f"✅ Deshecho: *{entry.get('resumen', '')}* (estaba aprobado hace {minutos} min "
+            f"por <@{entry['aprobado_por']}>). El registro quedó anulado en el Sheet y el mensaje "
+            "volvió a estar pendiente.")
+# ============ FIN COMANDO "/deshacer" ============
 
 
 # ============ BOTÓN "Ver historial del cliente" (genérico, para cualquier ficha) ============
