@@ -641,6 +641,9 @@ FORM_SPECS["domiciliar"] = {
         "campo": "empresa", "columna": "Empresa", "columna_fecha": "Fecha",
         "modo": "texto", "etiqueta": "empresa",
     },
+    # La Tasa BCV se escribe a mano aquí (no viene de /tasa-hoy) — se compara contra la
+    # tasa oficial de hoy para atajar typos (ver motor_formularios.py, _publicar_para_aprobacion).
+    "verificar_tasa": {"campo_tasa": "tasa_bcv", "obtener_oficial": lambda datos: _tasa_de_hoy()},
     "boton_historial": "ver_historial_domiciliar",
     "canal": "#cobranzas-domiciliacion",
     "titulo_mensaje": "Nueva domiciliación reportada",
@@ -801,6 +804,9 @@ FORM_SPECS["cobro_callcenter"] = {
         "campo": "cedula", "columna": "Cedula", "columna_fecha": "Fecha",
         "modo": "cedula", "etiqueta": "cédula",
     },
+    # La Tasa BCV se escribe a mano aquí (no viene de /tasa-hoy) — se compara contra la
+    # tasa oficial de hoy para atajar typos (ver motor_formularios.py, _publicar_para_aprobacion).
+    "verificar_tasa": {"campo_tasa": "tasa_bcv", "obtener_oficial": lambda datos: _tasa_de_hoy()},
     "boton_historial": "ver_historial_callcenter",
     "boton_historial_label": "🔍 Buscar cliente / ver historial",
     "canal": "C0BAS4M970S",
@@ -1445,6 +1451,9 @@ FORM_SPECS["cobro_comercial"] = {
         "campo": "cedula", "columna": "Cedula", "columna_fecha": "Fecha",
         "modo": "cedula", "etiqueta": "cédula",
     },
+    # La Tasa BCV se escribe a mano aquí (no viene de /tasa-hoy) — se compara contra la
+    # tasa oficial de hoy para atajar typos (ver motor_formularios.py, _publicar_para_aprobacion).
+    "verificar_tasa": {"campo_tasa": "tasa_bcv", "obtener_oficial": lambda datos: _tasa_de_hoy()},
     "boton_historial": "ver_historial_comercial",
     "boton_historial_label": "🔍 Buscar cliente / ver historial",
     "canal": CANAL_COMERCIAL,
