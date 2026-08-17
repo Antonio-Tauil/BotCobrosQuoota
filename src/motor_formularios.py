@@ -793,7 +793,8 @@ def _historial_reciente_generico(sheet, columna_busqueda, valor_busqueda, modo, 
         return []
 
 
-def _construir_handler_historial(nombre_spec, columnas_valores, autocompletar=None, mapeo_autocompletar=None):
+def _construir_handler_historial(nombre_spec, columnas_valores, autocompletar=None, mapeo_autocompletar=None,
+                                  calcular_score=None):
     """Arma el handler del botón 'Ver historial' para la ficha 'nombre_spec' (que debe tener
     'boton_historial' y 'verificar_duplicado' definidos). Se registra en el archivo del
     comando así:
@@ -854,6 +855,15 @@ def _construir_handler_historial(nombre_spec, columnas_valores, autocompletar=No
                 partes_texto.append(f"📜 *Historial reciente de {dup_spec['etiqueta']} {valor_input}:*\n{lineas}")
             else:
                 partes_texto.append(f"📜 No encontré registros anteriores de {dup_spec['etiqueta']} {valor_input}.")
+            # ---- Score de riesgo (opcional, solo cuando se busca por cédula) ----
+            if calcular_score and dup_spec.get("modo", "cedula") == "cedula":
+                try:
+                    score = calcular_score(_solo_digitos(valor_input))
+                except Exception as e:
+                    score = None
+                    print(f"⚠️ [{action_id}] No se pudo calcular el score de riesgo: {e}")
+                if score:
+                    partes_texto.append(f"📊 *Score de riesgo:* {score}")
             texto_extra = "\n\n".join(partes_texto)
         try:
             client.views_update(
@@ -880,7 +890,8 @@ def _construir_handler_historial(nombre_spec, columnas_valores, autocompletar=No
 # sí se benefician de no reescribir nombre/teléfono si el cliente ya está registrado en otro
 # lado. No requiere 'abrir_hoja' ni 'verificar_duplicado' en la ficha — la función
 # 'autocompletar' que se le pasa ya sabe dónde buscar.
-def _construir_handler_autocompletar(nombre_spec, campo_busqueda, autocompletar, mapeo_autocompletar=None):
+def _construir_handler_autocompletar(nombre_spec, campo_busqueda, autocompletar, mapeo_autocompletar=None,
+                                      calcular_score=None):
     """Arma el handler del botón 'Buscar cliente' para la ficha 'nombre_spec'. Se registra
     igual que _construir_handler_historial:
         _handler_x = _construir_handler_autocompletar("x", "cedula", _autocompletar_cliente)
@@ -913,11 +924,21 @@ def _construir_handler_autocompletar(nombre_spec, campo_busqueda, autocompletar,
                     if valor and campo_id in campos_ids:
                         valores_view[campo_id] = {"valor": {"value": valor}}
                         algo_relleno = True
+            partes_texto = []
             if algo_relleno:
-                texto_extra = ("✅ *Cliente encontrado:* se rellenaron los datos conocidos "
-                                "(puedes corregirlos si hace falta).")
+                partes_texto.append("✅ *Cliente encontrado:* se rellenaron los datos conocidos "
+                                     "(puedes corregirlos si hace falta).")
             else:
-                texto_extra = "🔍 No encontré datos adicionales para esta cédula."
+                partes_texto.append("🔍 No encontré datos adicionales para esta cédula.")
+            if calcular_score:
+                try:
+                    score = calcular_score(_solo_digitos(valor_input))
+                except Exception as e:
+                    score = None
+                    print(f"⚠️ [{action_id}] No se pudo calcular el score de riesgo: {e}")
+                if score:
+                    partes_texto.append(f"📊 *Score de riesgo:* {score}")
+            texto_extra = "\n\n".join(partes_texto)
         try:
             client.views_update(
                 view_id=body["view"]["id"],
