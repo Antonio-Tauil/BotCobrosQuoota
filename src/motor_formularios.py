@@ -4,10 +4,11 @@ diccionario compartido: cada archivo de comandos (cobros.py, etc.) agrega su pro
 "ficha" con FORM_SPECS["nombre"] = {...} al importarse. Estas funciones saben leer
 cualquier ficha y armar el modal, validar, guardar y publicar — sin repetir código.
 """
+import os
 import json
 from datetime import datetime
 from zoneinfo import ZoneInfo
-from config import app
+from config import app, get_cliente_busqueda
 from validaciones import (
     _validar_view, _registro_ya_guardado, _guardar_fila_por_encabezado, _id_amigable,
     _ya_procesado, _reservar_mensaje, _buscar_duplicado_reciente,
@@ -18,40 +19,125 @@ FORM_SPECS = {}
 
 
 # ============ MÉTRICAS DE ACTIVIDAD DEL DÍA (para el resumen del Cierre Diario) ============
-# Cuenta, en memoria, cuántos formularios se ENVÍAN, APRUEBAN y RECHAZAN por comando cada
-# día — para poder mostrarle a gerencia un resumen de actividad (cuánto se registró vs.
-# cuánto quedó pendiente de revisar) sin tener que llevar la cuenta a mano. Se resetea solo
-# al cambiar de fecha (no hace falta borrar nada) y, si el bot se reinicia a mitad del día
-# (ej. un redeploy en Railway), el conteo de ese día vuelve a cero — es una limitación
-# conocida y aceptable para un contador de "actividad de hoy", no un registro contable
-# (para eso ya están las hojas de Google Sheets, que sí son la fuente de verdad del dinero).
+# Cuenta cuántos formularios se ENVÍAN, APRUEBAN y RECHAZAN por comando cada día — para
+# poder mostrarle a gerencia un resumen de actividad (cuánto se registró vs. cuánto quedó
+# pendiente de revisar) sin tener que llevar la cuenta a mano.
+#
+# Se guarda en DOS lugares a la vez:
+#   1. En memoria (_METRICAS) — rápido, y sirve de respaldo si el Sheet falla por lo que sea.
+#   2. En la pestaña 'Metricas Actividad' del Sheet principal de Cobros (una fila por
+#      Fecha+Comando) — esta es la que de verdad importa, porque SOBREVIVE a que el bot se
+#      reinicie (deploys en Railway, caídas). Antes esto solo vivía en memoria y cada
+#      reinicio lo dejaba en cero a mitad del día; ahora el Cierre Diario siempre lee el
+#      conteo real acumulado del día, sin importar cuántas veces se haya reiniciado el bot.
 _METRICAS = {}
+PESTANA_METRICAS = "Metricas Actividad"
 
 # Nombres más amigables para comandos que no tienen "titulo_mensaje" en su ficha (ej. /cobro,
 # que es un formulario híbrido — ver cobros.py). Para el resto se usa spec["titulo_mensaje"].
 _ETIQUETAS_METRICAS = {"cobro": "Cobro"}
 
 
+def _abrir_hoja_metricas():
+    """Abre la pestaña 'Metricas Actividad' del Sheet principal de Cobros. Si no existe
+    todavía, intenta CREARLA (con sus encabezados) — así no hace falta que alguien la arme
+    a mano de antemano. Si por lo que sea no se puede ni abrir ni crear (permisos, Sheets
+    caído, etc.), devuelve None y el resto del código cae de vuelta al contador en memoria
+    como respaldo. Nunca lanza error."""
+    try:
+        cliente = get_cliente_busqueda()
+        spreadsheet = cliente.open_by_key(os.environ["SHEET_ID"])
+        for ws in spreadsheet.worksheets():
+            if ws.title.strip().lower() == PESTANA_METRICAS.lower():
+                return ws
+        ws = spreadsheet.add_worksheet(title=PESTANA_METRICAS, rows=500, cols=5)
+        ws.update("A1:E1", [["Fecha", "Comando", "Enviado", "Aprobado", "Rechazado"]])
+        print(f"✅ Se creó la pestaña '{PESTANA_METRICAS}' (primera vez que se usa).")
+        return ws
+    except Exception as e:
+        print(f"⚠️ Métricas: no se pudo abrir/crear '{PESTANA_METRICAS}': {type(e).__name__}: {e}")
+        return None
+
+
+def _numero_celda(fila, idx):
+    """Lee la celda idx (0-based) de 'fila' como entero, o 0 si está vacía/no es número."""
+    try:
+        return int(fila[idx]) if len(fila) > idx and str(fila[idx]).strip() else 0
+    except (ValueError, TypeError):
+        return 0
+
+
+def _fila_metricas(ws, fecha, comando):
+    """Devuelve (numero_de_fila, valores_de_la_fila) para (fecha, comando) en 'ws', o
+    (None, None) si esa combinación todavía no tiene fila."""
+    for i, fila in enumerate(ws.get_all_values()[1:], start=2):
+        if len(fila) >= 2 and fila[0].strip() == fecha and fila[1].strip() == comando:
+            return i, fila
+    return None, None
+
+
 def _registrar_metrica(nombre_spec, tipo):
     """Suma 1 al contador de 'tipo' ('enviado'/'aprobado'/'rechazado') de 'nombre_spec' para
-    el día de hoy (hora Venezuela). Nunca lanza error: si algo falla, simplemente no cuenta
-    esa vez — no debe interrumpir el flujo real de aprobar/rechazar/publicar."""
+    el día de hoy (hora Venezuela) — en memoria Y en el Sheet ('Metricas Actividad'), para
+    que el conteo sobreviva a un reinicio del bot. Nunca lanza error: si algo falla, simplemente
+    no cuenta esa vez (o solo cuenta en memoria) — no debe interrumpir el flujo real de
+    aprobar/rechazar/publicar."""
+    hoy = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y")
     try:
-        hoy = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y")
         dia = _METRICAS.setdefault(hoy, {})
         contador = dia.setdefault(nombre_spec, {"enviado": 0, "aprobado": 0, "rechazado": 0})
         contador[tipo] = contador.get(tipo, 0) + 1
     except Exception as e:
-        print(f"⚠️ No se pudo registrar la métrica ({nombre_spec}/{tipo}): {e}")
+        print(f"⚠️ No se pudo registrar la métrica en memoria ({nombre_spec}/{tipo}): {e}")
+    try:
+        ws = _abrir_hoja_metricas()
+        if ws is None:
+            return
+        columnas = {"enviado": 3, "aprobado": 4, "rechazado": 5}
+        col = columnas.get(tipo)
+        if col is None:
+            return
+        fila_num, fila_actual = _fila_metricas(ws, hoy, nombre_spec)
+        if fila_num is None:
+            conteo = {"enviado": 0, "aprobado": 0, "rechazado": 0}
+            conteo[tipo] = 1
+            ws.append_row([hoy, nombre_spec, conteo["enviado"], conteo["aprobado"], conteo["rechazado"]])
+        else:
+            valor_actual = _numero_celda(fila_actual, col - 1)
+            ws.update_cell(fila_num, col, valor_actual + 1)
+    except Exception as e:
+        print(f"⚠️ No se pudo guardar la métrica en el Sheet ({nombre_spec}/{tipo}): {e}")
+
+
+def _leer_metricas_del_dia(hoy):
+    """Devuelve {comando: {"enviado":n,"aprobado":n,"rechazado":n}} para 'hoy', leyendo la
+    pestaña 'Metricas Actividad' (sobrevive a reinicios del bot). Si el Sheet no se puede
+    leer por lo que sea, cae de vuelta al contador en memoria de ESTE proceso (mejor un dato
+    parcial — solo lo que pasó desde que arrancó el proceso actual — que ninguno)."""
+    try:
+        ws = _abrir_hoja_metricas()
+        if ws is not None:
+            dia = {}
+            for fila in ws.get_all_values()[1:]:
+                if len(fila) >= 2 and fila[0].strip() == hoy:
+                    dia[fila[1].strip()] = {
+                        "enviado": _numero_celda(fila, 2),
+                        "aprobado": _numero_celda(fila, 3),
+                        "rechazado": _numero_celda(fila, 4),
+                    }
+            if dia:
+                return dia
+    except Exception as e:
+        print(f"⚠️ No se pudieron leer las métricas del Sheet, usando las de memoria: {e}")
+    return _METRICAS.get(hoy, {})
 
 
 def _resumen_metricas_hoy():
     """Arma el texto del resumen de actividad de HOY (enviados/aprobados/rechazados/
     pendientes, total y por comando) para agregar al Cierre Diario. Devuelve None si no hubo
-    ninguna actividad registrada hoy (ej. el bot se reinició después de la última actividad,
-    o de verdad no se usó ningún formulario)."""
+    ninguna actividad registrada hoy."""
     hoy = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y")
-    dia = _METRICAS.get(hoy, {})
+    dia = _leer_metricas_del_dia(hoy)
     if not dia:
         return None
     total_enviados = sum(c.get("enviado", 0) for c in dia.values())
