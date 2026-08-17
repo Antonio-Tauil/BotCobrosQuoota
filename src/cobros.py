@@ -98,6 +98,52 @@ def _abrir_hoja_contactados():
     return None
 
 
+# ============ SCORE DE RIESGO DEL CLIENTE (basado en promesas cumplidas/falladas) ============
+# Lee 'Contactados' (misma hoja donde /promesa-cumplida y /promesa-fallida marcan la
+# columna H "Estado de promesa") y calcula qué tan cumplidor ha sido un cliente con sus
+# compromisos de pago anteriores. Es un dato de contexto para quien va a aprobar o
+# gestionar un cobro — NO bloquea ni condiciona nada, solo informa. Por eso, igual que
+# el resto de los helpers de "contexto" de este archivo, nunca lanza error: si algo
+# falla, simplemente no se muestra score (mejor sin dato que romper el flujo).
+def _score_riesgo_cliente(cedula_digitos, minimo_promesas=1):
+    """Devuelve un texto tipo '🟢 *Bajo riesgo* — 3/3 promesas cumplidas' según el
+    historial de promesas de esta cédula en 'Contactados', o None si no hay al menos
+    'minimo_promesas' promesas ya resueltas (Cumplida/Fallida) para dar un score confiable.
+    Promesas sin resultado todavía (columna vacía) no cuentan ni a favor ni en contra."""
+    if not cedula_digitos:
+        return None
+    try:
+        sheet = _abrir_hoja_contactados()
+        if sheet is None:
+            return None
+        col_cedula = _columna_por_nombre(sheet, "Cedula")
+        col_estado = _columna_por_nombre(sheet, "Estado de promesa")
+        if col_cedula is None or col_estado is None:
+            return None
+        idx_cedula, idx_estado = col_cedula - 1, col_estado - 1
+        cumplidas = fallidas = 0
+        for fila in sheet.get_all_values()[1:]:
+            if len(fila) > idx_cedula and _solo_digitos(fila[idx_cedula]) == cedula_digitos:
+                estado = fila[idx_estado].strip() if len(fila) > idx_estado else ""
+                if estado == "Cumplida":
+                    cumplidas += 1
+                elif estado == "Fallida":
+                    fallidas += 1
+        total = cumplidas + fallidas
+        if total < minimo_promesas:
+            return None
+        ratio = cumplidas / total
+        if ratio >= 0.8:
+            emoji, etiqueta = "🟢", "Bajo riesgo"
+        elif ratio >= 0.5:
+            emoji, etiqueta = "🟡", "Riesgo medio"
+        else:
+            emoji, etiqueta = "🔴", "Alto riesgo"
+        return f"{emoji} *{etiqueta}* — {cumplidas}/{total} promesas cumplidas"
+    except Exception as e:
+        print(f"⚠️ No se pudo calcular el score de riesgo del cliente: {e}")
+        return None
+# ============ FIN SCORE DE RIESGO DEL CLIENTE ============
 
 
 # ============ MENSAJE REDISEÑADO (mismo estilo que /cobro y /merca-reporte) ============
@@ -178,7 +224,7 @@ def recibir_contacto(ack, body, client):
 # "verificar_duplicado" (varios contactos legítimos con el mismo cliente en la semana son
 # normales acá, a diferencia de un cobro).
 _handler_autocompletar_contactar = _construir_handler_autocompletar(
-    "contactar", "cedula", _autocompletar_cliente)
+    "contactar", "cedula", _autocompletar_cliente, calcular_score=_score_riesgo_cliente)
 
 
 @app.action("ver_historial_contactar")
@@ -355,6 +401,14 @@ def ver_historial_cobro(ack, body, client):
             partes_texto.append(f"📜 *Historial reciente de la cédula {cedula_input}:*\n{lineas}")
         else:
             partes_texto.append(f"📜 No encontré cobros anteriores de la cédula {cedula_input} en 'Pagos Recibidos'.")
+        # ---- Score de riesgo (cumplimiento de promesas anteriores) ----
+        try:
+            score = _score_riesgo_cliente(cedula_digitos)
+        except Exception as e:
+            score = None
+            print(f"⚠️ [ver_historial_cobro] No se pudo calcular el score de riesgo: {e}")
+        if score:
+            partes_texto.append(f"📊 *Score de riesgo:* {score}")
         texto_extra = "\n\n".join(partes_texto)
     spec = FORM_SPECS["cobro"]
     try:
@@ -395,26 +449,42 @@ def _texto_cobro_base(fecha, nombre_cobrador, cobrador_slack, descripcion, cedul
 
 @app.view("form_cobro")
 def recibir_cobro(ack, body, client):
-    _v = body["view"]["state"]["values"]
-    _err = _validar_formulario_generico("cobro", _v)
+    # ---- Todo lo de acá abajo va en un try/except a propósito: es la única parte del bot
+    # donde se hace un trabajo "pesado" (buscar la tasa BCV en Google Sheets, con su propia
+    # consulta en vivo si el caché venció) ANTES de llamar a ack(). Slack le da al bot solo
+    # 3 segundos para confirmar que recibió el envío del formulario — si Google Sheets se
+    # demora, o si cualquiera de estos pasos lanza un error inesperado, sin este try/except
+    # el código nunca llegaría a la línea de ack() y el formulario del usuario se quedaría
+    # "colgado" (con el aviso de Slack de 'didn't call ack()' en los logs), sin haberse
+    # guardado el cobro y sin que la persona sepa qué pasó. Con el try/except, pase lo que
+    # pase, siempre se le responde algo a Slack a tiempo.
+    try:
+        _v = body["view"]["state"]["values"]
+        _err = _validar_formulario_generico("cobro", _v)
 
-    hoy_txt = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y")
-    fecha_pago_input = (_v.get("fecha_pago", {}).get("valor", {}).get("value") or "").strip()
-    if fecha_pago_input:
-        _ok_fecha, _msg_fecha = _es_fecha_valida(fecha_pago_input)
-        if not _ok_fecha:
-            _err["fecha_pago"] = _msg_fecha
-        fecha_pago_final = fecha_pago_input
-    else:
-        fecha_pago_final = hoy_txt
-
-    _tasa_num = _tasa_de_pago(fecha_pago_final, hoy_txt)
-    if _tasa_num is None:
-        if fecha_pago_final == hoy_txt:
-            _err["monto_bs"] = "⚠️ Falta la tasa de hoy. Pide que pongan /tasa-hoy [valor] antes de reportar cobros."
+        hoy_txt = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y")
+        fecha_pago_input = (_v.get("fecha_pago", {}).get("valor", {}).get("value") or "").strip()
+        if fecha_pago_input:
+            _ok_fecha, _msg_fecha = _es_fecha_valida(fecha_pago_input)
+            if not _ok_fecha:
+                _err["fecha_pago"] = _msg_fecha
+            fecha_pago_final = fecha_pago_input
         else:
-            _err["fecha_pago"] = (f"⚠️ No hay tasa registrada para el {fecha_pago_final}. Pide que la fijen con "
-                                   f"/tasa-hoy {fecha_pago_final} [valor] antes de reportar este cobro.")
+            fecha_pago_final = hoy_txt
+
+        _tasa_num = _tasa_de_pago(fecha_pago_final, hoy_txt)
+        if _tasa_num is None:
+            if fecha_pago_final == hoy_txt:
+                _err["monto_bs"] = "⚠️ Falta la tasa de hoy. Pide que pongan /tasa-hoy [valor] antes de reportar cobros."
+            else:
+                _err["fecha_pago"] = (f"⚠️ No hay tasa registrada para el {fecha_pago_final}. Pide que la fijen con "
+                                       f"/tasa-hoy {fecha_pago_final} [valor] antes de reportar este cobro.")
+    except Exception as e:
+        print(f"❌ [recibir_cobro] Error inesperado antes de confirmar el envío: {type(e).__name__}: {e}")
+        ack(response_action="errors", errors={
+            "monto_bs": "⚠️ Hubo un error inesperado procesando el formulario. Cierra el formulario e intenta de nuevo en unos segundos."
+        })
+        return
     if _err:
         ack(response_action="errors", errors=_err)
         return
@@ -1015,7 +1085,7 @@ def editar_cobro2(ack, body, client):
 # con el mapeo por defecto, no hace falta indicar mapeo_autocompletar).
 _handler_historial_callcenter = _construir_handler_historial(
     "cobro_callcenter", ["MontoBs", "MontoUsd", "Nº referencia pago"],
-    autocompletar=_autocompletar_cliente)
+    autocompletar=_autocompletar_cliente, calcular_score=_score_riesgo_cliente)
 
 
 @app.action("ver_historial_callcenter")
@@ -1205,7 +1275,8 @@ def editar_conciliacion(ack, body, client):
 # y /conciliar no tiene campo de teléfono — de ahí el mapeo_autocompletar).
 _handler_historial_conciliar = _construir_handler_historial(
     "conciliar", ["Monto reportado", "Monto banco", "Estado"],
-    autocompletar=_autocompletar_cliente, mapeo_autocompletar={"nombre": "cliente"})
+    autocompletar=_autocompletar_cliente, mapeo_autocompletar={"nombre": "cliente"},
+    calcular_score=_score_riesgo_cliente)
 
 
 @app.action("ver_historial_conciliar")
@@ -1369,7 +1440,8 @@ def editar_liquidacion_nueva(ack, body, client):
 # solo "nombre" (este formulario no tiene campo de teléfono).
 _handler_historial_liquidacion_nueva = _construir_handler_historial(
     "liquidacion_nueva", ["Clientes/Empresas", "Estatus"],
-    autocompletar=_autocompletar_cliente, mapeo_autocompletar={"nombre": "nombre"})
+    autocompletar=_autocompletar_cliente, mapeo_autocompletar={"nombre": "nombre"},
+    calcular_score=_score_riesgo_cliente)
 
 
 @app.action("ver_historial_liquidacion_nueva")
@@ -1660,7 +1732,8 @@ def editar_comercial(ack, body, client):
 # Botón "Ver historial" (genérico — ver motor_formularios.py). Busca por cédula, y de paso
 # rellena nombre/teléfono si ya se conoce al cliente.
 _handler_historial_comercial = _construir_handler_historial(
-    "cobro_comercial", ["MontoBs", "MontoUsd"], autocompletar=_autocompletar_cliente)
+    "cobro_comercial", ["MontoBs", "MontoUsd"], autocompletar=_autocompletar_cliente,
+    calcular_score=_score_riesgo_cliente)
 
 
 @app.action("ver_historial_comercial")
@@ -1783,7 +1856,7 @@ def editar_contacto_legal(ack, body, client):
 # Botón "Buscar cliente" (rellena nombre/teléfono si ya está registrado — sin historial,
 # igual que /contactar, ya que este comando tampoco lleva "verificar_duplicado").
 _handler_autocompletar_contacto_legal = _construir_handler_autocompletar(
-    "contacto_legal", "cedula", _autocompletar_cliente)
+    "contacto_legal", "cedula", _autocompletar_cliente, calcular_score=_score_riesgo_cliente)
 
 
 @app.action("ver_historial_contacto_legal")
