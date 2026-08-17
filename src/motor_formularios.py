@@ -11,7 +11,7 @@ from config import app
 from validaciones import (
     _validar_view, _registro_ya_guardado, _guardar_fila_por_encabezado, _id_amigable,
     _ya_procesado, _reservar_mensaje, _buscar_duplicado_reciente,
-    _normalizar_para_comparar, _columna_por_nombre, _solo_digitos,
+    _normalizar_para_comparar, _columna_por_nombre, _solo_digitos, parse_numero,
 )
 
 FORM_SPECS = {}
@@ -369,6 +369,49 @@ def _publicar_para_aprobacion(nombre_spec, body, client):
                 "deny": {"type": "plain_text", "text": "Cancelar"},
             }
     # ============ FIN AVISO DE POSIBLE DUPLICADO ============
+
+    # ============ AVISO DE POSIBLE ERROR EN LA TASA BCV (dato tecleado a mano) ============
+    # Algunos comandos (domiciliar, cobro_callcenter, cobro_comercial) piden la Tasa BCV
+    # escrita a mano, en vez de tomarla de /tasa-hoy como hace /cobro — así que un typo (un
+    # cero de más, una coma corrida) no lo agarra ninguna validación de formato, y el Monto en
+    # USD calculado con esa tasa queda con un valor absurdo (ej. $0.03 en vez de $26) sin que
+    # nadie se dé cuenta hasta revisar el Sheet a mano. Si la ficha pide "verificar_tasa", se
+    # compara lo escrito contra la tasa oficial (la que devuelva 'obtener_oficial', normalmente
+    # la de /tasa-hoy) y, si se aleja demasiado (más del umbral), se avisa y se pide confirmar
+    # antes de aprobar — igual que el aviso de posible duplicado. Usa el emoji 💱 (no
+    # ✅/❌/⚠), por la misma razón que el aviso de duplicado usa 🔁.
+    tasa_spec = spec.get("verificar_tasa")
+    if tasa_spec:
+        try:
+            tasa_escrita = parse_numero(datos_campos.get(tasa_spec["campo_tasa"], ""))
+        except (ValueError, TypeError):
+            tasa_escrita = None
+        try:
+            tasa_oficial = tasa_spec["obtener_oficial"](datos_campos)
+            tasa_oficial = float(tasa_oficial) if tasa_oficial else None
+        except Exception as e:
+            tasa_oficial = None
+            print(f"⚠️ [{nombre_spec}] No se pudo comparar contra la tasa oficial: {e}")
+        if tasa_escrita and tasa_oficial:
+            cambio = abs(tasa_escrita - tasa_oficial) / tasa_oficial
+            umbral = tasa_spec.get("umbral", 0.5)
+            if cambio > umbral:
+                texto = (f"💱 *POSIBLE ERROR EN LA TASA BCV* — escribiste Bs. {tasa_escrita:,.4f} pero la tasa "
+                         f"oficial es Bs. {tasa_oficial:,.4f} (una diferencia de {cambio * 100:,.0f}%). Revisa "
+                         f"que no se te haya colado un dígito de más o de menos.\n\n" + texto)
+                if confirmar_aprobar:
+                    confirmar_aprobar["text"]["text"] += ("\n\nAdemás, la tasa BCV escrita parece fuera de "
+                                                           "rango — revísala antes de confirmar.")
+                else:
+                    confirmar_aprobar = {
+                        "title": {"type": "plain_text", "text": "Confirmar tasa fuera de rango"},
+                        "text": {"type": "mrkdwn", "text": (
+                            f"La tasa escrita (Bs. {tasa_escrita:,.4f}) difiere mucho de la oficial "
+                            f"(Bs. {tasa_oficial:,.4f}). ¿Aprobar de todas formas?")},
+                        "confirm": {"type": "plain_text", "text": "Sí, aprobar de todas formas"},
+                        "deny": {"type": "plain_text", "text": "Cancelar"},
+                    }
+    # ============ FIN AVISO DE POSIBLE ERROR EN LA TASA BCV ============
 
     boton_aprobar = {"type": "button", "text": {"type": "plain_text", "text": "✅ Aprobar"}, "style": "primary",
                      "action_id": f"aprobar_{sufijo_accion}"}
