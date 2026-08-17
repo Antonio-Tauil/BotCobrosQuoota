@@ -80,6 +80,7 @@ def _mostrar_ayuda(ack, respond):
         "• `/merca-reporte` — Reportar conciliación de pago, incidencia técnica o problema de acceso\n"
         "• `/incidencia-fullcode` — Reportar una incidencia técnica con código completo\n\n"
         "*Utilidad:*\n"
+        "• `/deshacer` — Revertir la última aprobación (solo dentro de los primeros 30 min)\n"
         "• `/listar-ids` — Ver los IDs de canales y usuarios de Slack\n"
         "• `/probar-radar` — Probar manualmente el Radar de Promesas (4 PM)\n"
         "• `/probar-cierre` — Probar manualmente el Cierre Diario (6 PM)\n"
