@@ -26,6 +26,7 @@ from motor_formularios import (
     _construir_texto_mensaje, _ejecutar_formulario_generico, _publicar_para_aprobacion,
     _aprobar_generico, _rechazar_generico, _editar_generico, _valor_actual_bloque,
     _construir_handler_historial, _registrar_metrica, _construir_handler_autocompletar,
+    _valores_view_desde_metadata,
 )
 
 
@@ -372,6 +373,25 @@ def ver_historial_cobro(ack, body, client):
 # ============ FIN BOTÓN "Ver historial del cliente" ============
 
 
+# Extraído de 'recibir_cobro' para poder reusarlo tal cual desde el handler de edición
+# (ver "editar_cobro" / "editar_cobro_formulario" más abajo) — así el mensaje corregido se
+# ve exactamente igual de armado que el original, sin duplicar el formato en dos lugares.
+def _texto_cobro_base(fecha, nombre_cobrador, cobrador_slack, descripcion, cedula, numero,
+                       forma_pago, banco, monto_bs_fmt, monto_usd_str, tasa_bcv_str):
+    return (
+        f"💰 *Nuevo cobro — {monto_usd_str} USD*\n"
+        f"*{descripcion} · Cédula {cedula}*\n"
+        f"\n"
+        f"──────────────────────────\n"
+        f"📅 *Fecha:* {fecha}\n"
+        f"👤 *Cobrador:* {nombre_cobrador} (<@{cobrador_slack}>)\n"
+        f"📱 *Teléfono:* {numero}\n"
+        f"🏦 *Pago:* {forma_pago} · {banco}\n"
+        f"💵 *Monto:* {monto_bs_fmt}  (≈ {monto_usd_str})\n"
+        f"📊 *Tasa BCV:* {tasa_bcv_str}"
+    )
+
+
 @app.view("form_cobro")
 def recibir_cobro(ack, body, client):
     _v = body["view"]["state"]["values"]
@@ -423,18 +443,8 @@ def recibir_cobro(ack, body, client):
     # agrupado debajo de una línea divisoria — en vez de diez líneas de "*Etiqueta:* valor"
     # seguidas. El monto se muestra en Bs. Y en $ juntos en la misma línea (pedido explícito),
     # junto con la Tasa BCV usada para ese cálculo.
-    texto = (
-        f"💰 *Nuevo cobro — {monto_usd_str} USD*\n"
-        f"*{descripcion} · Cédula {cedula}*\n"
-        f"\n"
-        f"──────────────────────────\n"
-        f"📅 *Fecha:* {fecha}\n"
-        f"👤 *Cobrador:* {nombre_cobrador} (<@{cobrador_slack}>)\n"
-        f"📱 *Teléfono:* {numero}\n"
-        f"🏦 *Pago:* {forma_pago} · {banco}\n"
-        f"💵 *Monto:* {monto_bs_fmt}  (≈ {monto_usd_str})\n"
-        f"📊 *Tasa BCV:* {tasa_bcv_str}"
-    )
+    texto = _texto_cobro_base(fecha, nombre_cobrador, cobrador_slack, descripcion, cedula,
+                               numero, forma_pago, banco, monto_bs_fmt, monto_usd_str, tasa_bcv_str)
     # ============ FIN MENSAJE REDISEÑADO ============
 
     # ============ AVISO DE POSIBLE DUPLICADO (mismo cliente, misma semana) ============
@@ -476,12 +486,17 @@ def recibir_cobro(ack, body, client):
         metadata={"event_type": "cobro_reportado", "event_payload": {
             "fecha": fecha, "cobrador": nombre_cobrador, "descripcion": descripcion,
             "numero": numero, "cedula": cedula, "monto_bs": monto_bs_fmt,
-            "forma_pago": forma_pago, "banco": banco, "tasa_bcv": tasa_bcv_str, "monto_usd": monto_usd_str}},
+            "forma_pago": forma_pago, "banco": banco, "tasa_bcv": tasa_bcv_str, "monto_usd": monto_usd_str,
+            # Quién lo reportó de verdad en Slack (distinto de "cobrador", que es el nombre
+            # elegido en el desplegable) — así, si alguien lo edita después, el mensaje sigue
+            # diciendo "Cobrador: ... (@quien lo reportó)" y no se le atribuye a quien corrigió.
+            "_reportado_por": cobrador_slack}},
         blocks=[
             {"type": "section", "text": {"type": "mrkdwn", "text": texto}},
             {"type": "actions", "elements": [
                 boton_aprobar,
-                {"type": "button", "text": {"type": "plain_text", "text": "❌ Rechazar"}, "style": "danger", "action_id": "rechazar"}
+                {"type": "button", "text": {"type": "plain_text", "text": "❌ Rechazar"}, "style": "danger", "action_id": "rechazar"},
+                {"type": "button", "text": {"type": "plain_text", "text": "✏️ Editar"}, "action_id": "editar_cobro"},
             ]}
         ]
     )
@@ -534,6 +549,130 @@ def rechazar(ack, body, client):
         blocks=[{"type": "section", "text": {"type": "mrkdwn",
                  "text": f"❌ *RECHAZADO* por <@{body['user']['id']}> el {fecha_revision}\n\n{texto_original}"}}]
     )
+
+
+# ============ BOTÓN "✏️ Editar" ANTES DE APROBAR — versión propia de /cobro ============
+# /cobro no usa el motor genérico para aprobar/rechazar (guarda con 'guardar_en_sheet' y
+# arma su propio texto a mano), así que reusa el mecanismo genérico de edición SOLO para
+# armar y prellenar el modal (_valores_view_desde_metadata) — el guardado de la corrección
+# está escrito a mano aquí, siguiendo exactamente la misma lógica que 'recibir_cobro'
+# (recalcula la Tasa BCV y el Monto USD para la fecha elegida, valida lo mismo).
+@app.action("editar_cobro")
+def editar_cobro(ack, body, client):
+    ack()
+    spec = FORM_SPECS["cobro"]
+    texto_original = body["message"]["blocks"][0]["text"]["text"]
+    if _ya_procesado(texto_original):
+        return  # ya fue aprobado/rechazado — no tiene caso editar algo que ya se resolvió
+    meta = dict(body["message"].get("metadata", {}).get("event_payload", {}))
+    reportado_por = meta.get("_reportado_por") or body["user"]["id"]
+    # Mapeo: el campo del modal se llama 'nombre_cobrador'/'fecha_pago', pero en la metadata
+    # quedaron guardados como 'cobrador'/'fecha' (ver 'recibir_cobro' más arriba).
+    valores_view = _valores_view_desde_metadata(
+        spec, meta, mapeo={"nombre_cobrador": "cobrador", "fecha_pago": "fecha"})
+    privado = json.dumps({
+        "canal": body["channel"]["id"],
+        "ts": body["message"]["ts"],
+        "reportado_por": reportado_por,
+    })
+    try:
+        client.views_open(
+            trigger_id=body["trigger_id"],
+            view={
+                "type": "modal",
+                "callback_id": "editar_cobro_formulario",
+                "private_metadata": privado,
+                "title": {"type": "plain_text", "text": "Editar antes de aprobar"},
+                "submit": {"type": "plain_text", "text": "Guardar cambios"},
+                "blocks": _construir_blocks_formulario(spec, valores_view),
+            }
+        )
+    except Exception as e:
+        print(f"⚠️ [cobro] No se pudo abrir el formulario de edición: {e}")
+
+
+@app.view("editar_cobro_formulario")
+def recibir_edicion_cobro(ack, body, client):
+    _v = body["view"]["state"]["values"]
+    _err = _validar_formulario_generico("cobro", _v)
+
+    hoy_txt = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y")
+    fecha_pago_input = (_v.get("fecha_pago", {}).get("valor", {}).get("value") or "").strip()
+    if fecha_pago_input:
+        _ok_fecha, _msg_fecha = _es_fecha_valida(fecha_pago_input)
+        if not _ok_fecha:
+            _err["fecha_pago"] = _msg_fecha
+        fecha_pago_final = fecha_pago_input
+    else:
+        fecha_pago_final = hoy_txt
+
+    _tasa_num = _tasa_de_pago(fecha_pago_final, hoy_txt)
+    if _tasa_num is None:
+        if fecha_pago_final == hoy_txt:
+            _err["monto_bs"] = "⚠️ Falta la tasa de hoy. Pide que pongan /tasa-hoy [valor] antes de reportar cobros."
+        else:
+            _err["fecha_pago"] = (f"⚠️ No hay tasa registrada para el {fecha_pago_final}. Pide que la fijen con "
+                                   f"/tasa-hoy {fecha_pago_final} [valor] antes de reportar este cobro.")
+    if _err:
+        ack(response_action="errors", errors=_err)
+        return
+    ack()
+
+    try:
+        privado = json.loads(body["view"]["private_metadata"])
+    except Exception:
+        return
+    canal = privado.get("canal")
+    ts = privado.get("ts")
+    reportado_por = privado.get("reportado_por") or body["user"]["id"]
+    editor = body["user"]["id"]
+
+    valores = body["view"]["state"]["values"]
+    nombre_cobrador = valores["nombre_cobrador"]["valor"]["selected_option"]["value"]
+    descripcion = valores["descripcion"]["valor"]["value"]
+    cedula = valores["cedula"]["valor"]["value"]
+    numero = valores["numero"]["valor"]["value"]
+    monto_bs_str = valores["monto_bs"]["valor"]["value"]
+    forma_pago = valores["forma_pago"]["valor"]["selected_option"]["value"]
+    banco = valores["banco"]["valor"]["selected_option"]["value"]
+    tasa_bcv_num = _tasa_num
+    tasa_bcv_str = f"{tasa_bcv_num:,.4f}"
+    fecha = fecha_pago_final
+    try:
+        monto_bs_num = parse_numero(monto_bs_str)
+        monto_usd_str = f"${monto_bs_num/tasa_bcv_num:,.2f}"
+        monto_bs_fmt = f"Bs. {monto_bs_num:,.2f}"
+    except (ValueError, ZeroDivisionError):
+        monto_usd_str = "(No calculable)"
+        monto_bs_fmt = f"Bs. {monto_bs_str}"
+
+    # 'reportado_por' (no 'editor') va en el lugar del cobrador_slack, para que el mensaje
+    # corregido siga diciendo quién lo reportó ORIGINALMENTE — igual que hace el mecanismo
+    # genérico de edición para el resto de los comandos.
+    texto = _texto_cobro_base(fecha, nombre_cobrador, reportado_por, descripcion, cedula,
+                               numero, forma_pago, banco, monto_bs_fmt, monto_usd_str, tasa_bcv_str)
+    texto_con_aviso = f"✏️ *Editado por <@{editor}> antes de aprobar*\n\n{texto}"
+
+    try:
+        client.chat_update(
+            channel=canal, ts=ts, text="Cobro corregido",
+            metadata={"event_type": "cobro_reportado", "event_payload": {
+                "fecha": fecha, "cobrador": nombre_cobrador, "descripcion": descripcion,
+                "numero": numero, "cedula": cedula, "monto_bs": monto_bs_fmt,
+                "forma_pago": forma_pago, "banco": banco, "tasa_bcv": tasa_bcv_str, "monto_usd": monto_usd_str,
+                "_reportado_por": reportado_por}},
+            blocks=[
+                {"type": "section", "text": {"type": "mrkdwn", "text": texto_con_aviso}},
+                {"type": "actions", "elements": [
+                    {"type": "button", "text": {"type": "plain_text", "text": "✅ Aprobar"}, "style": "primary", "action_id": "aprobar"},
+                    {"type": "button", "text": {"type": "plain_text", "text": "❌ Rechazar"}, "style": "danger", "action_id": "rechazar"},
+                    {"type": "button", "text": {"type": "plain_text", "text": "✏️ Editar"}, "action_id": "editar_cobro"},
+                ]}
+            ]
+        )
+    except Exception as e:
+        print(f"⚠️ [cobro] Error guardando la corrección: {e}")
+# ============ FIN BOTÓN "✏️ Editar" ANTES DE APROBAR (/cobro) ============
 # ============ FIN COMANDO /cobro ============
 
 
