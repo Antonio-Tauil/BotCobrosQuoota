@@ -75,7 +75,8 @@ def _mostrar_ayuda(ack, respond):
         "• `/promesa-cumplida` — Marcar una promesa como cumplida\n"
         "• `/promesa-fallida` — Marcar una promesa como fallida\n\n"
         "*Tasa del día:*\n"
-        "• `/tasa-hoy [valor]` — Fijar la tasa de cambio de hoy (ej: `/tasa-hoy 761.50`)\n\n"
+        "• `/tasa-hoy [valor]` — Fijar la tasa de cambio de hoy (ej: `/tasa-hoy 761.50`)\n"
+        "• _Si a las 9:30 AM o 12:00 PM nadie la ha fijado, le llega un aviso automático a Leandro._\n\n"
         "*Mercadeo:*\n"
         "• `/merca-reporte` — Reportar conciliación de pago, incidencia técnica o problema de acceso\n"
         "• `/incidencia-fullcode` — Reportar una incidencia técnica con código completo\n\n"
@@ -86,6 +87,7 @@ def _mostrar_ayuda(ack, respond):
         "• `/probar-cierre` — Probar manualmente el Cierre Diario (6 PM)\n"
         "• `/probar-reporte-semanal` — Probar manualmente los reportes semanales\n"
         "• `/probar-reporte-mensual` — Probar manualmente los reportes mensuales\n"
+        "• `/probar-recordatorio-tasa` — Probar manualmente el recordatorio de la Tasa BCV\n"
         "• `/ayuda` — Ver esta lista de comandos\n\n"
         "_¿Algo no funciona como esperabas? Avísale a Antonio._"
     )
