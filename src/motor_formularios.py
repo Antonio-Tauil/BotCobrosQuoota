@@ -493,18 +493,23 @@ def _rechazar_generico(nombre_spec, body, client):
 # con lo que se reportó, corregir solo el campo que hacía falta, y guardar — el mensaje se
 # actualiza con los datos corregidos y sigue esperando Aprobar/Rechazar, como si nada. No toca
 # el Sheet todavía (eso solo pasa al Aprobar) — es una corrección "en el aire", antes de guardar.
-def _valores_view_desde_metadata(spec, meta):
+def _valores_view_desde_metadata(spec, meta, mapeo=None):
     """Convierte los valores guardados en la 'metadata' del mensaje (un dict simple
     block_id -> valor final) a la forma que espera '_construir_blocks_formulario' para
     repoblar el modal (la misma forma que produce 'state.values' de Slack). Para los
     campos tipo 'select', busca cuál opción de la ficha corresponde al valor guardado
     (para poder marcarla como 'initial_option'); si no la encuentra (ej. la opción ya no
     existe en la lista), simplemente deja ese campo vacío — no rompe nada, la persona solo
-    tiene que volver a elegirlo."""
+    tiene que volver a elegirlo. 'mapeo' es opcional: {block_id: nombre_en_metadata}, para
+    comandos donde el nombre guardado en la metadata no coincide con el id del campo del
+    modal (ej. /cobro guarda 'cobrador' en la metadata pero el campo del modal se llama
+    'nombre_cobrador') — si un campo no aparece en 'mapeo', se busca con su propio id."""
+    mapeo = mapeo or {}
     valores_view = {}
     for campo in spec["campos"]:
         bid = campo["id"]
-        valor = meta.get(bid, "")
+        clave_metadata = mapeo.get(bid, bid)
+        valor = meta.get(clave_metadata, "")
         if not valor:
             continue
         if campo["tipo"] == "select":
