@@ -123,6 +123,8 @@ _BANCOS_MERCADEO = [
     {"text": {"type": "plain_text", "text": "Banco Plaza"}, "value": "Banco Plaza"},
     {"text": {"type": "plain_text", "text": "Banco Digital de los Trabajadores"}, "value": "Banco Digital de los Trabajadores"},
     {"text": {"type": "plain_text", "text": "Banco de Destino"}, "value": "Banco de Destino"},
+    {"text": {"type": "plain_text", "text": "Banca Amiga"}, "value": "Banca Amiga"},
+    {"text": {"type": "plain_text", "text": "Venezolano de Crédito"}, "value": "Venezolano de Credito"},
     {"text": {"type": "plain_text", "text": "Otro"}, "value": "Otro"}
 ]
 
