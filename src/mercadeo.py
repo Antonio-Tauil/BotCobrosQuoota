@@ -16,7 +16,10 @@ from validaciones import (
     _normalizar_encabezado, _guardar_fila_por_encabezado, _registro_ya_guardado,
     _id_amigable, _ya_procesado, parse_numero, _validar_view, _reservar_mensaje,
 )
-from motor_formularios import FORM_SPECS, _abrir_formulario_generico, _validar_formulario_generico, _ejecutar_formulario_generico
+from motor_formularios import (
+    FORM_SPECS, _abrir_formulario_generico, _validar_formulario_generico, _ejecutar_formulario_generico,
+    _registrar_aprobacion_para_deshacer,
+)
 # _tasa_de_pago: para comparar la Tasa BCV que la persona escribe a mano en este formulario
 # contra la tasa OFICIAL de la fecha del pago (ver el aviso de typo de tasa, más abajo).
 from cobros import _tasa_de_pago, TASA_CAMBIO_ALERTA
@@ -378,6 +381,20 @@ def aprobar_merca_conciliacion(ack, body, client):
         encabezado = f"⚠️ *YA REGISTRADA* — esta conciliación ya estaba guardada, no se duplicó. Revisado por <@{body['user']['id']}> el {fecha_revision}"
     else:
         encabezado = f"✅ *APROBADO* por <@{body['user']['id']}> el {fecha_revision}"
+        if resultado == "OK":
+            _blocks_msg = body["message"].get("blocks", [])
+            _registrar_aprobacion_para_deshacer({
+                "abrir_hoja": lambda: _abrir_hoja_mercadeo("Conciliacion"),
+                "columna_id_registro": "ID Registro",
+                "registro_id": registro_id,
+                "canal": body["channel"]["id"],
+                "ts": body["message"]["ts"],
+                "texto_original": texto_original,
+                "blocks_accion_original": _blocks_msg[1] if len(_blocks_msg) > 1
+                    else {"type": "actions", "elements": []},
+                "aprobado_por": body["user"]["id"],
+                "resumen": "Conciliación de Mercadeo",
+            })
     client.chat_update(
         channel=body["channel"]["id"], ts=body["message"]["ts"], text="Conciliación de Mercadeo procesada",
         blocks=[{"type": "section", "text": {"type": "mrkdwn", "text": f"{encabezado}\n\n{texto_original}"}}]
