@@ -48,12 +48,28 @@ def _opciones_cobradores():
 
 
 
-# Conexión propia para la búsqueda (usa el mismo patrón del resto del bot)
+# ============ CONEXIÓN COMPARTIDA A GOOGLE SHEETS (se arma UNA sola vez) ============
+# Antes, cada función que necesitaba leer/escribir en Sheets armaba su propia conexión
+# desde cero (leer las credenciales, autenticarse con Google) en cada llamada — eso es la
+# parte lenta de hablar con Sheets, mucho más que la lectura/escritura en sí. Con esto se
+# arma una sola vez (la primera vez que alguien la pide) y se reutiliza siempre — es seguro
+# dejarla en memoria así de indefinido: el token interno de Google se refresca solo cuando
+# hace falta, no se "vence" por tenerla cacheada. Todas las funciones "_abrir_hoja_*" del
+# bot (en cobros.py, mercadeo.py, reportes.py) usan esta misma función en vez de armar su
+# propia conexión — así todo el bot comparte una sola conexión real a Google Sheets.
+_CLIENTE_SHEETS_CACHEADO = None
+
+
 def get_cliente_busqueda():
+    global _CLIENTE_SHEETS_CACHEADO
+    if _CLIENTE_SHEETS_CACHEADO is not None:
+        return _CLIENTE_SHEETS_CACHEADO
     creds_json = json.loads(os.environ["GOOGLE_CREDENTIALS"])
     creds_json["private_key"] = creds_json["private_key"].replace("\\n", "\n")
     creds = Credentials.from_service_account_info(
         creds_json,
         scopes=["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
     )
-    return gspread.authorize(creds)
+    _CLIENTE_SHEETS_CACHEADO = gspread.authorize(creds)
+    return _CLIENTE_SHEETS_CACHEADO
+# ============ FIN CONEXIÓN COMPARTIDA A GOOGLE SHEETS ============
