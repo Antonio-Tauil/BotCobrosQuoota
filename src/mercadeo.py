@@ -19,7 +19,7 @@ from validaciones import (
 )
 from motor_formularios import (
     FORM_SPECS, _abrir_formulario_generico, _validar_formulario_generico, _ejecutar_formulario_generico,
-    _registrar_aprobacion_para_deshacer,
+    _registrar_aprobacion_para_deshacer, _notificar_resultado_al_reportante,
 )
 # _tasa_de_pago: para comparar la Tasa BCV que la persona escribe a mano en este formulario
 # contra la tasa OFICIAL de la fecha del pago (ver el aviso de typo de tasa, más abajo).
@@ -336,7 +336,7 @@ def recibir_conciliacion_mercadeo(ack, body, client):
                 "fecha_reporte": fecha_reporte, "nombre_colaborador": nombre_colaborador, "telefono": telefono,
                 "cedula": cedula, "monto_bs": monto_bs_fmt, "forma_pago": forma_pago, "banco": banco,
                 "fecha_pago": fecha_pago, "monto_usd": monto_usd_fmt, "tasa_bcv": tasa_bcv_fmt,
-                "referencia": referencia}},
+                "referencia": referencia, "_reportado_por": usuario_slack}},
             blocks=[
                 {"type": "section", "text": {"type": "mrkdwn", "text": texto}},
                 {"type": "actions", "elements": [
@@ -360,6 +360,7 @@ def aprobar_merca_conciliacion(ack, body, client):
     fecha_revision = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y")
     registro_id = _id_amigable("MERCACONC", body["message"]["ts"])
     resultado = "ERROR"
+    meta = {}
     try:
         meta = body["message"].get("metadata", {}).get("event_payload", {})
         resultado = guardar_conciliacion_mercadeo(
@@ -369,8 +370,11 @@ def aprobar_merca_conciliacion(ack, body, client):
             "Aprobado", body["user"]["id"], fecha_revision, registro_id)
     except Exception as e:
         print(f"Error: {e}")
+    reportado_por = meta.get("_reportado_por")
     if resultado == "DUPLICADO":
         encabezado = f"⚠️ *YA REGISTRADA* — esta conciliación ya estaba guardada, no se duplicó. Revisado por <@{body['user']['id']}> el {fecha_revision}"
+        _notificar_resultado_al_reportante(client, reportado_por, "Conciliación de Mercadeo", "⚠️",
+                                            "ya estaba registrada (no se duplicó)", body["user"]["id"], fecha_revision)
     else:
         encabezado = f"✅ *APROBADO* por <@{body['user']['id']}> el {fecha_revision}"
         if resultado == "OK":
@@ -387,6 +391,8 @@ def aprobar_merca_conciliacion(ack, body, client):
                 "aprobado_por": body["user"]["id"],
                 "resumen": "Conciliación de Mercadeo",
             })
+            _notificar_resultado_al_reportante(client, reportado_por, "Conciliación de Mercadeo", "✅",
+                                                "fue aprobada", body["user"]["id"], fecha_revision)
     client.chat_update(
         channel=body["channel"]["id"], ts=body["message"]["ts"], text="Conciliación de Mercadeo procesada",
         blocks=[{"type": "section", "text": {"type": "mrkdwn", "text": f"{encabezado}\n\n{texto_original}"}}]
@@ -402,11 +408,14 @@ def rechazar_merca_conciliacion(ack, body, client):
     if not _reservar_mensaje(body["message"]["ts"]):
         return  # alguien más ya está procesando este mismo clic (doble clic o dos personas a la vez)
     fecha_revision = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y")
+    reportado_por = body["message"].get("metadata", {}).get("event_payload", {}).get("_reportado_por")
     client.chat_update(
         channel=body["channel"]["id"], ts=body["message"]["ts"], text="Conciliación de Mercadeo RECHAZADA",
         blocks=[{"type": "section", "text": {"type": "mrkdwn",
                  "text": f"❌ *RECHAZADO* por <@{body['user']['id']}> el {fecha_revision}\n\n{texto_original}"}}]
     )
+    _notificar_resultado_al_reportante(client, reportado_por, "Conciliación de Mercadeo", "❌",
+                                        "fue rechazada", body["user"]["id"], fecha_revision)
 
 
 @app.view("form_merca_incidencia")
@@ -444,7 +453,7 @@ def recibir_incidencia_mercadeo(ack, body, client):
             text="Nueva incidencia técnica (Mercadeo)",
             metadata={"event_type": "merca_incidencia", "event_payload": {
                 "fecha_reporte": fecha_reporte, "nombre": nombre, "cedula": cedula, "empresa": empresa,
-                "incidencia": incidencia, "descripcion": descripcion}},
+                "incidencia": incidencia, "descripcion": descripcion, "_reportado_por": usuario_slack}},
             blocks=[
                 {"type": "section", "text": {"type": "mrkdwn", "text": texto}},
                 {"type": "actions", "elements": [
@@ -468,6 +477,7 @@ def aprobar_merca_incidencia(ack, body, client):
     fecha_revision = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y")
     registro_id = _id_amigable("MERCAINC", body["message"]["ts"])
     resultado = "ERROR"
+    meta = {}
     try:
         meta = body["message"].get("metadata", {}).get("event_payload", {})
         resultado = guardar_incidencia_mercadeo(
@@ -476,10 +486,15 @@ def aprobar_merca_incidencia(ack, body, client):
             "Aprobado", body["user"]["id"], fecha_revision, registro_id)
     except Exception as e:
         print(f"Error: {e}")
+    reportado_por = meta.get("_reportado_por")
     if resultado == "DUPLICADO":
         encabezado = f"⚠️ *YA REGISTRADA* — esta incidencia ya estaba guardada, no se duplicó. Revisado por <@{body['user']['id']}> el {fecha_revision}"
+        _notificar_resultado_al_reportante(client, reportado_por, "Incidencia Técnica", "⚠️",
+                                            "ya estaba registrada (no se duplicó)", body["user"]["id"], fecha_revision)
     else:
         encabezado = f"✅ *APROBADO* por <@{body['user']['id']}> el {fecha_revision}"
+        _notificar_resultado_al_reportante(client, reportado_por, "Incidencia Técnica", "✅",
+                                            "fue aprobada", body["user"]["id"], fecha_revision)
     client.chat_update(
         channel=body["channel"]["id"], ts=body["message"]["ts"], text="Incidencia técnica procesada",
         blocks=[{"type": "section", "text": {"type": "mrkdwn", "text": f"{encabezado}\n\n{texto_original}"}}]
@@ -495,11 +510,14 @@ def rechazar_merca_incidencia(ack, body, client):
     if not _reservar_mensaje(body["message"]["ts"]):
         return  # alguien más ya está procesando este mismo clic (doble clic o dos personas a la vez)
     fecha_revision = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y")
+    reportado_por = body["message"].get("metadata", {}).get("event_payload", {}).get("_reportado_por")
     client.chat_update(
         channel=body["channel"]["id"], ts=body["message"]["ts"], text="Incidencia técnica RECHAZADA",
         blocks=[{"type": "section", "text": {"type": "mrkdwn",
                  "text": f"❌ *RECHAZADO* por <@{body['user']['id']}> el {fecha_revision}\n\n{texto_original}"}}]
     )
+    _notificar_resultado_al_reportante(client, reportado_por, "Incidencia Técnica", "❌",
+                                        "fue rechazada", body["user"]["id"], fecha_revision)
 # ============ FIN MÓDULO DE MERCADEO ============
 
 
