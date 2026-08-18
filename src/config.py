@@ -9,6 +9,7 @@ import json
 import gspread
 from slack_bolt import App
 from google.oauth2.service_account import Credentials
+from validaciones import _normalizar_encabezado
 
 app = App(token=os.environ["SLACK_BOT_TOKEN"])
 
@@ -73,3 +74,52 @@ def get_cliente_busqueda():
     _CLIENTE_SHEETS_CACHEADO = gspread.authorize(creds)
     return _CLIENTE_SHEETS_CACHEADO
 # ============ FIN CONEXIÓN COMPARTIDA A GOOGLE SHEETS ============
+
+
+# ============ PESTAÑAS CACHEADAS (para no gastar cuota de lectura de más) ============
+# Aunque ya se comparte la conexión de arriba, cada '_abrir_hoja_*' del bot todavía le
+# pedía a Google, EN CADA LLAMADA: "abre este archivo por su ID" + "dame la lista de sus
+# pestañas" — dos lecturas más a la cuota, solo para encontrar la pestaña correcta, antes
+# de siquiera leer un dato real. Como la lista de pestañas de un Sheet casi nunca cambia
+# mientras el bot está corriendo, se puede cachear el resultado de "encontrar la pestaña X
+# del archivo Y" para siempre (dentro de este proceso) — la PRIMERA vez que se pide, sí se
+# consulta a Google; de ahí en adelante se reutiliza el mismo objeto. Esto NO cachea los
+# DATOS de la pestaña (get_all_values() sigue siendo siempre una lectura fresca y real) —
+# solo evita repetir la búsqueda de "¿cuál pestaña es esta?" una y otra vez.
+#
+# Esta caché fue clave para resolver los errores '429 Quota exceeded' que empezaron a
+# aparecer en producción: entre la conexión (ya cacheada) y esto, cada operación del bot
+# pasó de costar 3-4 lecturas de cuota a costar 1 sola (la lectura real de datos).
+_HOJAS_CACHEADAS = {}
+
+
+def abrir_pestana_cacheada(spreadsheet_id, nombre_pestana):
+    """Abre la pestaña 'nombre_pestana' del Sheet 'spreadsheet_id', comparando el nombre
+    ignorando mayúsculas/tildes/espacios de más (igual que el resto del bot). Cachea el
+    resultado para siempre (por este proceso) — llamadas siguientes con la MISMA
+    combinación (spreadsheet_id, nombre_pestana) no vuelven a gastar cuota de lectura
+    buscando la pestaña. Devuelve None si no la encuentra o si algo falla (nunca lanza
+    error)."""
+    clave = (spreadsheet_id, _normalizar_encabezado(nombre_pestana))
+    if clave in _HOJAS_CACHEADAS:
+        return _HOJAS_CACHEADAS[clave]
+    try:
+        cliente = get_cliente_busqueda()
+        spreadsheet = cliente.open_by_key(spreadsheet_id)
+        objetivo = _normalizar_encabezado(nombre_pestana)
+        for ws in spreadsheet.worksheets():
+            if _normalizar_encabezado(ws.title) == objetivo:
+                _HOJAS_CACHEADAS[clave] = ws
+                return ws
+    except Exception as e:
+        print(f"⚠️ No se pudo abrir la pestaña '{nombre_pestana}': {type(e).__name__}: {e}")
+    return None
+
+
+def guardar_pestana_en_cache(spreadsheet_id, nombre_pestana, ws):
+    """Guarda manualmente un objeto de pestaña ya abierto (o recién CREADO, ej. cuando
+    'Metricas Actividad' no existía todavía) en la misma caché de abrir_pestana_cacheada —
+    así las próximas llamadas la reutilizan también, sin tener que volver a buscarla."""
+    clave = (spreadsheet_id, _normalizar_encabezado(nombre_pestana))
+    _HOJAS_CACHEADAS[clave] = ws
+# ============ FIN PESTAÑAS CACHEADAS ============
