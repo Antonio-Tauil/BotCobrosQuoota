@@ -18,14 +18,14 @@ Incidencias Técnicas de Mercadeo.
 """
 import os
 import re
-import json
 import time
-import gspread
 from datetime import datetime, date, timedelta
 from zoneinfo import ZoneInfo
-from google.oauth2.service_account import Credentials
 
-from config import app, SHEET_ID_MERCADEO, CANAL_CIERRE, CANAL_MERCADEO_PAGOS, CANAL_REPORTES_MENSUALES, SUPERVISOR_ID
+from config import (
+    app, SHEET_ID_MERCADEO, CANAL_CIERRE, CANAL_MERCADEO_PAGOS, CANAL_REPORTES_MENSUALES,
+    SUPERVISOR_ID, get_cliente_busqueda,
+)
 from validaciones import parse_numero, _columna_por_nombre
 from motor_formularios import FORM_SPECS, _marcar_inicio_reporte, _marcar_fin_reporte, _reportes_colgados
 from cobros import _abrir_hoja_domiciliacion, _abrir_hoja_cobro2, _abrir_hoja_conciliacion, _abrir_hoja_comercial
@@ -37,13 +37,9 @@ from mercadeo import _abrir_hoja_mercadeo
 def _abrir_hoja_pagos_recibidos():
     """Abre la misma hoja 'Pagos Recibidos' (SHEET_ID) donde se guardan los cobros de
     /cobro, igual que hace el Cierre Diario en promesas.py."""
-    creds_json = json.loads(os.environ["GOOGLE_CREDENTIALS"])
-    creds_json["private_key"] = creds_json["private_key"].replace("\\n", "\n")
-    creds = Credentials.from_service_account_info(
-        creds_json,
-        scopes=["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-    )
-    cliente = gspread.authorize(creds)
+    # Conexión compartida (una sola por proceso — ver get_cliente_busqueda en config.py),
+    # en vez de armar una conexión nueva desde cero cada vez que se llama esta función.
+    cliente = get_cliente_busqueda()
     try:
         return cliente.open_by_key(os.environ["SHEET_ID"]).worksheet("Pagos Recibidos")
     except Exception as e:
