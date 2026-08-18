@@ -7,11 +7,22 @@ este archivo se importa PRIMERO, antes que cualquier otro módulo del bot.
 import os
 import json
 import gspread
+from concurrent.futures import ThreadPoolExecutor
 from slack_bolt import App
 from google.oauth2.service_account import Credentials
 from validaciones import _normalizar_encabezado
 
-app = App(token=os.environ["SLACK_BOT_TOKEN"])
+# Slack Bolt ejecuta TODOS los comandos/acciones/formularios del bot (de /cobro, /contactar,
+# los botones de aprobar/rechazar, etc.) sobre un mismo grupo compartido de hilos. Por defecto
+# ese grupo es de solo 5 hilos — si varios de esos hilos quedan ocupados a la vez esperando
+# (por ejemplo, reintentando una operación de Google Sheets que tardó por una cuota excedida),
+# un comando nuevo que llega puede quedarse "en fila" varios segundos antes de que le toque su
+# turno. Eso es un problema para /contactar, /cobro, etc. porque abren un modal usando un
+# 'trigger_id' que Slack solo deja usar dentro de los primeros ~3 segundos — si el comando
+# se queda esperando turno más que eso, el modal falla con un error como 'fatal_error' o
+# 'expired_trigger_id'. Con más hilos disponibles, es mucho menos probable que un comando se
+# quede esperando tanto tiempo.
+app = App(token=os.environ["SLACK_BOT_TOKEN"], listener_executor=ThreadPoolExecutor(max_workers=30))
 
 
 
