@@ -10,7 +10,7 @@ import json
 from datetime import datetime, date, timedelta
 from zoneinfo import ZoneInfo
 
-from config import app, CANAL_SEGUIMIENTO, CANAL_CIERRE, SUPERVISOR_ID, get_cliente_busqueda
+from config import app, CANAL_SEGUIMIENTO, CANAL_CIERRE, SUPERVISOR_ID, abrir_pestana_cacheada
 from validaciones import _solo_digitos, parse_numero
 from motor_formularios import _resumen_metricas_hoy, _marcar_inicio_reporte, _marcar_fin_reporte
 
@@ -124,17 +124,17 @@ def generar_resumen_promesas():
     """Lee 'Contactados', agrupa promesas por cobrador y publica el resumen."""
     _marcar_inicio_reporte("Radar de Promesas")
     try:
-        # Conexión compartida (una sola por proceso — ver get_cliente_busqueda en config.py),
-        # en vez de armar una conexión nueva desde cero cada vez que se llama esta función.
-        cliente = get_cliente_busqueda()
-        spreadsheet = cliente.open_by_key(os.environ["SHEET_ID"])
-        sheet = None
-        for ws in spreadsheet.worksheets():
-            if ws.title.strip().lower() == "contactados":
-                sheet = ws
-                break
+        # Pestaña cacheada (ver abrir_pestana_cacheada en config.py) — no vuelve a gastar
+        # cuota de lectura buscando la pestaña en cada llamada.
+        sheet = abrir_pestana_cacheada(os.environ["SHEET_ID"], "Contactados")
         if sheet is None:
-            print("❌ Radar: no se encontró la hoja 'Contactados'")
+            # abrir_pestana_cacheada nunca lanza error (para no romper el bot por una
+            # cuota excedida puntual) — pero si de verdad no se pudo abrir la hoja
+            # (credenciales, permisos, etc.), igual hay que avisarle al supervisor,
+            # no solo dejarlo en los logs de Railway.
+            error = RuntimeError("No se encontró/pudo abrir la hoja 'Contactados'")
+            print(f"❌ Radar: {error}")
+            _avisar_falla_reporte("Radar de Promesas", error)
             return
 
         valores = sheet.get_all_values()
@@ -282,13 +282,7 @@ def _marcar_promesa(cedula_texto, estado):
     cedula_digitos = _solo_digitos(cedula_texto)
     if not cedula_digitos:
         return 0, None
-    cliente = get_cliente_busqueda()
-    spreadsheet = cliente.open_by_key(os.environ["SHEET_ID"])
-    hoja = None
-    for ws in spreadsheet.worksheets():
-        if ws.title.strip().lower() == "contactados":
-            hoja = ws
-            break
+    hoja = abrir_pestana_cacheada(os.environ["SHEET_ID"], "Contactados")
     if hoja is None:
         return 0, None
     valores = hoja.get_all_values()
@@ -361,12 +355,11 @@ def generar_cierre_diario():
     """Lee 'Pagos Recibidos', suma los cobros de HOY y publica el cierre del día."""
     _marcar_inicio_reporte("Cierre Diario")
     try:
-        cliente = get_cliente_busqueda()
-        spreadsheet = cliente.open_by_key(os.environ["SHEET_ID"])
-        try:
-            hoja = spreadsheet.worksheet("Pagos Recibidos")
-        except Exception:
-            print("❌ Cierre: no se encontró la hoja 'Pagos Recibidos'")
+        hoja = abrir_pestana_cacheada(os.environ["SHEET_ID"], "Pagos Recibidos")
+        if hoja is None:
+            error = RuntimeError("No se encontró/pudo abrir la hoja 'Pagos Recibidos'")
+            print(f"❌ Cierre: {error}")
+            _avisar_falla_reporte("Cierre Diario", error)
             return
         valores = hoja.get_all_values()
         hoy_txt = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y")
@@ -504,13 +497,7 @@ def mis_promesas(ack, body, client):
         return
 
     try:
-        cliente = get_cliente_busqueda()
-        spreadsheet = cliente.open_by_key(os.environ["SHEET_ID"])
-        hoja = None
-        for ws in spreadsheet.worksheets():
-            if ws.title.strip().lower() == "contactados":
-                hoja = ws
-                break
+        hoja = abrir_pestana_cacheada(os.environ["SHEET_ID"], "Contactados")
         if hoja is None:
             client.chat_postEphemeral(channel=canal, user=usuario, text="❌ No encontré la hoja 'Contactados'.")
             return
