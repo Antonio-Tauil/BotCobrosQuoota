@@ -6,12 +6,12 @@ MISMO Google Sheet de Mercadeo y comparten _abrir_hoja_mercadeo() para abrir sus
 """
 import os
 import json
-import gspread
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from config import (
-    app, SHEET_ID_MERCADEO, CANAL_MERCADEO_PAGOS, CANAL_MERCADEO_INCIDENCIAS, get_cliente_busqueda,
+    app, SHEET_ID_MERCADEO, CANAL_MERCADEO_PAGOS, CANAL_MERCADEO_INCIDENCIAS,
+    abrir_pestana_cacheada,
 )
 from validaciones import (
     _normalizar_encabezado, _guardar_fila_por_encabezado, _registro_ya_guardado,
@@ -28,23 +28,16 @@ from cobros import _tasa_de_pago, TASA_CAMBIO_ALERTA
 
 # ============ MÓDULO DE MERCADEO (Conciliación de Pagos e Incidencias Técnicas) ============
 def _abrir_hoja_mercadeo(nombre_pestana):
-    # Conexión compartida (una sola por proceso — ver get_cliente_busqueda en config.py),
-    # en vez de armar una conexión nueva desde cero cada vez que se llama esta función.
-    cliente = get_cliente_busqueda()
-    spreadsheet = cliente.open_by_key(SHEET_ID_MERCADEO)
-    try:
-        return spreadsheet.worksheet(nombre_pestana)
-    except gspread.exceptions.WorksheetNotFound:
-        # Busca de nuevo ignorando mayúsculas/tildes/espacios de más, por si el nombre de la
-        # pestaña en el Sheet no coincide EXACTO (ej. un espacio invisible al final del título).
-        objetivo = _normalizar_encabezado(nombre_pestana)
-        for pestana in spreadsheet.worksheets():
-            if _normalizar_encabezado(pestana.title) == objetivo:
-                return pestana
-        nombres_disponibles = ", ".join(f"'{p.title}'" for p in spreadsheet.worksheets())
-        print(f"❌ No se encontró la pestaña '{nombre_pestana}' en el Sheet. "
-              f"Pestañas disponibles: {nombres_disponibles}")
-        raise
+    # Pestaña cacheada (ver config.py) — ya no le pregunta a Google "cuáles son tus
+    # pestañas" en cada llamada, solo la primera vez. Ya compara ignorando mayúsculas/
+    # tildes/espacios de más por su cuenta, así que no hace falta ningún reintento manual
+    # acá. Devuelve None si no la encuentra (antes lanzaba una excepción) — el resto del
+    # código (guardar_conciliacion_mercadeo, guardar_incidencia_mercadeo, y el motor
+    # genérico vía "abrir_hoja") ya sabe manejar un None sin explotar.
+    ws = abrir_pestana_cacheada(SHEET_ID_MERCADEO, nombre_pestana)
+    if ws is None:
+        print(f"❌ No se encontró la pestaña '{nombre_pestana}' en el Sheet de Mercadeo.")
+    return ws
 
 
 def guardar_conciliacion_mercadeo(fecha_reporte, nombre_colaborador, telefono, cedula, monto_bs, forma_pago,
