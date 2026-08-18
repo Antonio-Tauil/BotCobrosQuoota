@@ -176,6 +176,30 @@ def _resumen_metricas_hoy():
 # ============ FIN MÉTRICAS DE ACTIVIDAD DEL DÍA ============
 
 
+# ============ DM AUTOMÁTICO A QUIEN REPORTÓ (al aprobar/rechazar) ============
+# Antes, quien reportaba un cobro/domiciliación/etc. solo se enteraba de si se aprobó o
+# rechazó si volvía a revisar el canal — ahora se le manda un mensaje directo apenas se
+# resuelve, usando el mismo Slack ID que ya se guardaba en la metadata del mensaje
+# ("_reportado_por", ver _publicar_para_aprobacion más abajo). Nunca lanza error ni bloquea
+# el flujo real de aprobar/rechazar: si el DM falla (usuario desactivado, sin DMs con el
+# bot, etc.) simplemente no se manda, y queda un aviso en consola para revisar si hace falta.
+def _notificar_resultado_al_reportante(client, usuario_reportante, titulo_mensaje, emoji, veredicto, revisor_id, fecha_revision):
+    """'veredicto' es el texto ya armado, ej. 'fue aprobada' / 'fue rechazada' / 'ya estaba
+    registrada (no se duplicó)'. No manda nada si no hay a quién avisar, o si quien
+    aprobó/rechazó es la MISMA persona que reportó (no hace falta avisarse a sí mismo)."""
+    if not usuario_reportante or usuario_reportante == revisor_id:
+        return
+    try:
+        client.chat_postMessage(
+            channel=usuario_reportante,
+            text=(f"{emoji} Tu *{titulo_mensaje}* {veredicto} — revisado por <@{revisor_id}> "
+                  f"el {fecha_revision}.")
+        )
+    except Exception as e:
+        print(f"⚠️ No se pudo enviar el DM de aviso a <@{usuario_reportante}>: {e}")
+# ============ FIN DM AUTOMÁTICO A QUIEN REPORTÓ ============
+
+
 # ============ VIGILANTE DE REPORTES COLGADOS ============
 # Los 4 reportes automáticos (Radar 4PM, Cierre 6PM, Semanal lunes, Mensual día 1) ya
 # avisan por DM al supervisor si terminan con un ERROR (_avisar_falla_reporte). Pero si
@@ -545,13 +569,16 @@ def _aprobar_generico(nombre_spec, body, client):
     fecha_revision = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y")
     meta = dict(body["message"].get("metadata", {}).get("event_payload", {}))
     fecha_original = meta.pop("_fecha", fecha_revision)
-    meta.pop("_reportado_por", None)
+    reportado_por = meta.pop("_reportado_por", None)
     registro_id = ""
     if spec.get("anti_duplicado"):
         registro_id = _id_amigable(spec.get("prefijo_id", nombre_spec.upper()), body["message"]["ts"])
     resultado = _guardar_generico(nombre_spec, meta, fecha_original, registro_id)
+    titulo_mensaje = spec.get("titulo_mensaje", nombre_spec)
     if resultado == "DUPLICADO":
         encabezado = f"⚠️ *YA REGISTRADO* — ya estaba guardado, no se duplicó. Revisado por <@{body['user']['id']}> el {fecha_revision}"
+        _notificar_resultado_al_reportante(client, reportado_por, titulo_mensaje, "⚠️",
+                                            "ya estaba registrada (no se duplicó)", body["user"]["id"], fecha_revision)
     elif resultado == "OK":
         encabezado = f"✅ *APROBADO* por <@{body['user']['id']}> el {fecha_revision}"
         # Solo si de verdad se guardó una fila nueva (y tiene un "ID Registro" con el que
@@ -568,8 +595,10 @@ def _aprobar_generico(nombre_spec, body, client):
                 "blocks_accion_original": _blocks_msg[1] if len(_blocks_msg) > 1
                     else {"type": "actions", "elements": []},
                 "aprobado_por": body["user"]["id"],
-                "resumen": spec.get("titulo_mensaje", nombre_spec),
+                "resumen": titulo_mensaje,
             })
+        _notificar_resultado_al_reportante(client, reportado_por, titulo_mensaje, "✅",
+                                            "fue aprobada", body["user"]["id"], fecha_revision)
     else:
         encabezado = f"⚠️ *APROBADO pero hubo error guardando (revisar logs)* por <@{body['user']['id']}> el {fecha_revision}"
     client.chat_update(
@@ -589,11 +618,14 @@ def _rechazar_generico(nombre_spec, body, client):
         return  # alguien más ya está procesando este mismo clic (doble clic o dos personas a la vez)
     _registrar_metrica(nombre_spec, "rechazado")
     fecha_revision = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y")
+    reportado_por = body["message"].get("metadata", {}).get("event_payload", {}).get("_reportado_por")
     client.chat_update(
         channel=body["channel"]["id"], ts=body["message"]["ts"], text=f"{spec['titulo_mensaje']} RECHAZADO",
         blocks=[{"type": "section", "text": {"type": "mrkdwn",
                  "text": f"❌ *RECHAZADO* por <@{body['user']['id']}> el {fecha_revision}\n\n{texto_original}"}}]
     )
+    _notificar_resultado_al_reportante(client, reportado_por, spec.get("titulo_mensaje", nombre_spec), "❌",
+                                        "fue rechazada", body["user"]["id"], fecha_revision)
 # ============ FIN MOTOR GENÉRICO DE FORMULARIOS ============
 
 
