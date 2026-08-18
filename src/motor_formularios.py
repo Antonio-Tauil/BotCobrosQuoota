@@ -359,7 +359,10 @@ def _extraer_valores_formulario(spec, valores_view):
         if campo["tipo"] == "select":
             datos[bid] = (estado.get("selected_option") or {}).get("value", "")
         else:
-            datos[bid] = estado.get("value") or ""
+            # .strip(): un espacio en blanco "cuenta" como lleno para Slack (pasa la
+            # validación de campo obligatorio), pero se ve vacío en el Sheet — mejor
+            # limpiarlo acá antes de guardarlo (ver _es_texto_no_vacio en validaciones.py).
+            datos[bid] = (estado.get("value") or "").strip()
     if spec.get("calcular"):
         # Algunos comandos (montos en Bs/USD, tasas) necesitan calcular/formatear campos
         # antes de guardar y de publicar el mensaje — la ficha aporta esa función, y el
