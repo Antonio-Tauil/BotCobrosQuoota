@@ -5,10 +5,8 @@ cobros.py — Todos los comandos de cobranza: /contactar, /cobro, /domiciliar,
 """
 import os
 import json
-import gspread
 from datetime import datetime, date, timedelta
 from zoneinfo import ZoneInfo
-from google.oauth2.service_account import Credentials
 
 from config import (
     app, SHEET_ID_COBRO2, SHEET_ID_LIQUIDACIONES, SHEET_ID_COMERCIAL, SHEET_ID_LEGAL,
@@ -84,13 +82,9 @@ def _autocompletar_cliente(cedula_digitos):
 
 # ============ NUEVO COMANDO /contactar (migrado al Motor Genérico - Fase 3) ============
 def _abrir_hoja_contactados():
-    creds_json = json.loads(os.environ["GOOGLE_CREDENTIALS"])
-    creds_json["private_key"] = creds_json["private_key"].replace("\\n", "\n")
-    creds = Credentials.from_service_account_info(
-        creds_json,
-        scopes=["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-    )
-    cliente = gspread.authorize(creds)
+    # Conexión compartida (una sola por proceso — ver get_cliente_busqueda en config.py),
+    # en vez de armar una conexión nueva desde cero cada vez que se llama esta función.
+    cliente = get_cliente_busqueda()
     spreadsheet = cliente.open_by_key(os.environ["SHEET_ID"])
     for ws in spreadsheet.worksheets():
         if ws.title.strip().lower() == "contactados":
@@ -237,13 +231,9 @@ def ver_historial_contactar(ack, body, client):
 
 # ============ COMANDO /cobro ============
 def _abrir_hoja_pagos_recibidos_cobro():
-    creds_json = json.loads(os.environ["GOOGLE_CREDENTIALS"])
-    creds_json["private_key"] = creds_json["private_key"].replace("\\n", "\n")
-    creds = Credentials.from_service_account_info(
-        creds_json,
-        scopes=["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-    )
-    cliente = gspread.authorize(creds)
+    # Conexión compartida (una sola por proceso — ver get_cliente_busqueda en config.py),
+    # en vez de armar una conexión nueva desde cero cada vez que se llama esta función.
+    cliente = get_cliente_busqueda()
     return cliente.open_by_key(os.environ["SHEET_ID"]).worksheet("Pagos Recibidos")
 
 
@@ -767,13 +757,9 @@ def recibir_edicion_cobro(ack, body, client):
 
 # ============ COMANDO /domiciliar (usando el Motor Genérico) ============
 def _abrir_hoja_domiciliacion():
-    creds_json = json.loads(os.environ["GOOGLE_CREDENTIALS"])
-    creds_json["private_key"] = creds_json["private_key"].replace("\\n", "\n")
-    creds = Credentials.from_service_account_info(
-        creds_json,
-        scopes=["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-    )
-    cliente = gspread.authorize(creds)
+    # Conexión compartida (una sola por proceso — ver get_cliente_busqueda en config.py),
+    # en vez de armar una conexión nueva desde cero cada vez que se llama esta función.
+    cliente = get_cliente_busqueda()
     spreadsheet = cliente.open_by_key(os.environ["SHEET_ID"])
     for ws in spreadsheet.worksheets():
         if ws.title.strip().lower() in ("domiciliación", "domiciliacion"):
@@ -930,13 +916,9 @@ def ver_historial_domiciliar(ack, body, client):
 
 # ============ COMANDO /cobro-callcenter (Call Center Seguros) ============
 def _abrir_hoja_cobro2():
-    creds_json = json.loads(os.environ["GOOGLE_CREDENTIALS"])
-    creds_json["private_key"] = creds_json["private_key"].replace("\\n", "\n")
-    creds = Credentials.from_service_account_info(
-        creds_json,
-        scopes=["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-    )
-    cliente = gspread.authorize(creds)
+    # Conexión compartida (una sola por proceso — ver get_cliente_busqueda en config.py),
+    # en vez de armar una conexión nueva desde cero cada vez que se llama esta función.
+    cliente = get_cliente_busqueda()
     spreadsheet = cliente.open_by_key(SHEET_ID_COBRO2)
     try:
         return spreadsheet.worksheet("Hoja1")
@@ -1104,13 +1086,9 @@ def ver_historial_callcenter(ack, body, client):
 
 # ============ COMANDO /conciliar (usando el Motor Genérico) ============
 def _abrir_hoja_conciliacion():
-    creds_json = json.loads(os.environ["GOOGLE_CREDENTIALS"])
-    creds_json["private_key"] = creds_json["private_key"].replace("\\n", "\n")
-    creds = Credentials.from_service_account_info(
-        creds_json,
-        scopes=["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-    )
-    cliente = gspread.authorize(creds)
+    # Conexión compartida (una sola por proceso — ver get_cliente_busqueda en config.py),
+    # en vez de armar una conexión nueva desde cero cada vez que se llama esta función.
+    cliente = get_cliente_busqueda()
     spreadsheet = cliente.open_by_key(os.environ["SHEET_ID"])
     for ws in spreadsheet.worksheets():
         if ws.title.strip().lower() in ("conciliación", "conciliacion"):
@@ -1304,13 +1282,9 @@ BASES_LIQUIDACION = ["Base 1", "Base 2", "Base 3", "Base 4"]
 
 
 def _abrir_hoja_liquidaciones():
-    creds_json = json.loads(os.environ["GOOGLE_CREDENTIALS"])
-    creds_json["private_key"] = creds_json["private_key"].replace("\\n", "\n")
-    creds = Credentials.from_service_account_info(
-        creds_json,
-        scopes=["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-    )
-    cliente = gspread.authorize(creds)
+    # Conexión compartida (una sola por proceso — ver get_cliente_busqueda en config.py),
+    # en vez de armar una conexión nueva desde cero cada vez que se llama esta función.
+    cliente = get_cliente_busqueda()
     spreadsheet = cliente.open_by_key(SHEET_ID_LIQUIDACIONES)
     for ws in spreadsheet.worksheets():
         if _normalizar_encabezado(ws.title) == _normalizar_encabezado("Liquidacion VIP"):
@@ -1596,13 +1570,9 @@ def ver_historial_liquidacion_estatus(ack, body, client):
 
 # ============ COMANDO /cobro-comercial (Equipo Comercial) ============
 def _abrir_hoja_comercial():
-    creds_json = json.loads(os.environ["GOOGLE_CREDENTIALS"])
-    creds_json["private_key"] = creds_json["private_key"].replace("\\n", "\n")
-    creds = Credentials.from_service_account_info(
-        creds_json,
-        scopes=["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-    )
-    cliente = gspread.authorize(creds)
+    # Conexión compartida (una sola por proceso — ver get_cliente_busqueda en config.py),
+    # en vez de armar una conexión nueva desde cero cada vez que se llama esta función.
+    cliente = get_cliente_busqueda()
     spreadsheet = cliente.open_by_key(SHEET_ID_COMERCIAL)
     for ws in spreadsheet.worksheets():
         if ws.title.strip().lower() == "pagos":
@@ -1756,13 +1726,9 @@ def ver_historial_comercial(ack, body, client):
 
 # ============ COMANDO /contacto-legal (Equipo Legal) — usando el Motor Genérico ============
 def _abrir_hoja_contactados_legal():
-    creds_json = json.loads(os.environ["GOOGLE_CREDENTIALS"])
-    creds_json["private_key"] = creds_json["private_key"].replace("\\n", "\n")
-    creds = Credentials.from_service_account_info(
-        creds_json,
-        scopes=["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-    )
-    cliente = gspread.authorize(creds)
+    # Conexión compartida (una sola por proceso — ver get_cliente_busqueda en config.py),
+    # en vez de armar una conexión nueva desde cero cada vez que se llama esta función.
+    cliente = get_cliente_busqueda()
     spreadsheet = cliente.open_by_key(SHEET_ID_LEGAL)
     for ws in spreadsheet.worksheets():
         if ws.title.strip().lower() == "contactados":
@@ -1937,13 +1903,9 @@ def listar_ids(ack, body, client):
 # ============ COMANDO /clientes-escalados (usando el Motor Genérico) ============
 # Columnas: Fecha, Nombre del cliente, Teléfono, Cédula, Empresa, Incidencia, Reportada por
 def _abrir_hoja_escalados():
-    creds_json = json.loads(os.environ["GOOGLE_CREDENTIALS"])
-    creds_json["private_key"] = creds_json["private_key"].replace("\\n", "\n")
-    creds = Credentials.from_service_account_info(
-        creds_json,
-        scopes=["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-    )
-    cliente = gspread.authorize(creds)
+    # Conexión compartida (una sola por proceso — ver get_cliente_busqueda en config.py),
+    # en vez de armar una conexión nueva desde cero cada vez que se llama esta función.
+    cliente = get_cliente_busqueda()
     spreadsheet = cliente.open_by_key(SHEET_ID_ESCALADOS)
     for ws in spreadsheet.worksheets():
         if ws.title.strip().lower() == "clientes escalados":
