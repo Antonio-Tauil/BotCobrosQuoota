@@ -171,7 +171,7 @@ FORM_SPECS["contactar"] = {
     "callback_id": "form_contactar",
     "titulo": "Reportar Contacto",
     "campos": [
-        {"id": "nombre", "label": "Nombre del Cliente", "tipo": "texto"},
+        {"id": "nombre", "label": "Nombre del Cliente", "tipo": "texto", "validar": "requerido"},
         {"id": "telefono", "label": "Teléfono", "tipo": "texto", "validar": "telefono"},
         {"id": "cedula", "label": "Cédula", "tipo": "texto", "validar": "cedula"},
         {"id": "compromiso", "label": "Compromiso de pago (DD/MM/YYYY)", "tipo": "texto", "validar": "fecha"},
@@ -980,7 +980,7 @@ FORM_SPECS["cobro_callcenter"] = {
     "callback_id": "form_cobro2",
     "titulo": "Cobro Call Center",
     "campos": [
-        {"id": "nombre", "label": "Nombre del Cliente", "tipo": "texto"},
+        {"id": "nombre", "label": "Nombre del Cliente", "tipo": "texto", "validar": "requerido"},
         {"id": "cedula", "label": "Cédula del Cliente", "tipo": "texto", "validar": "cedula"},
         {"id": "telefono", "label": "Teléfono", "tipo": "texto", "validar": "telefono"},
         {"id": "monto_bs", "label": "Monto en Bs", "tipo": "texto", "validar": "monto"},
@@ -1328,7 +1328,7 @@ FORM_SPECS["liquidacion_nueva"] = {
     "callback_id": "form_liquidacion_nueva",
     "titulo": "Nueva Liquidación",
     "campos": [
-        {"id": "nombre", "label": "Nombre completo", "tipo": "texto"},
+        {"id": "nombre", "label": "Nombre completo", "tipo": "texto", "validar": "requerido"},
         {"id": "cedula", "label": "Cédula", "tipo": "texto", "validar": "cedula"},
         {"id": "cliente", "label": "Cliente / Empresa", "tipo": "texto"},
         {"id": "base", "label": "Base", "tipo": "select", "opciones": lambda: _opciones_lista(BASES_LIQUIDACION)},
@@ -1626,7 +1626,7 @@ FORM_SPECS["cobro_comercial"] = {
     "callback_id": "form_cobro_comercial",
     "titulo": "Cobro Comercial",
     "campos": [
-        {"id": "nombre", "label": "Nombre del Cliente", "tipo": "texto"},
+        {"id": "nombre", "label": "Nombre del Cliente", "tipo": "texto", "validar": "requerido"},
         {"id": "cedula", "label": "Cédula del Cliente", "tipo": "texto", "validar": "cedula"},
         {"id": "telefono", "label": "Teléfono", "tipo": "texto", "validar": "telefono"},
         {"id": "monto_bs", "label": "Monto en Bs", "tipo": "texto", "validar": "monto"},
@@ -1771,7 +1771,7 @@ FORM_SPECS["contacto_legal"] = {
     "callback_id": "form_contacto_legal",
     "titulo": "Contacto Legal",
     "campos": [
-        {"id": "nombre", "label": "Nombre del Cliente", "tipo": "texto"},
+        {"id": "nombre", "label": "Nombre del Cliente", "tipo": "texto", "validar": "requerido"},
         {"id": "telefono", "label": "Teléfono", "tipo": "texto", "validar": "telefono"},
         {"id": "cedula", "label": "Cédula", "tipo": "texto", "validar": "cedula"},
         {"id": "compromiso", "label": "Compromiso de pago (DD/MM/YYYY)", "tipo": "texto", "validar": "fecha"},
@@ -1945,7 +1945,7 @@ FORM_SPECS["clientes_escalados"] = {
     "callback_id": "form_cliente_escalado",
     "titulo": "Cliente Escalado",
     "campos": [
-        {"id": "nombre", "label": "Nombre del cliente", "tipo": "texto"},
+        {"id": "nombre", "label": "Nombre del cliente", "tipo": "texto", "validar": "requerido"},
         {"id": "telefono", "label": "Teléfono del cliente", "tipo": "texto", "validar": "telefono"},
         {"id": "cedula", "label": "Cédula del cliente", "tipo": "texto", "validar": "cedula"},
         {"id": "empresa", "label": "Empresa", "tipo": "texto"},
