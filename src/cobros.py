@@ -12,12 +12,13 @@ from config import (
     app, SHEET_ID_COBRO2, SHEET_ID_LIQUIDACIONES, SHEET_ID_COMERCIAL, SHEET_ID_LEGAL,
     SHEET_ID_ESCALADOS, CANAL_LIQUIDACIONES, CANAL_COMERCIAL, CANAL_LEGAL, CANAL_ESCALADOS,
     PESTANA_INDICADORES, PESTANA_HISTORIAL_TASAS, _opciones_cobradores, get_cliente_busqueda,
-    SUPERVISOR_ID,
+    SUPERVISOR_ID, abrir_pestana_cacheada,
 )
 from validaciones import (
     _normalizar_encabezado, _guardar_fila_por_encabezado, _columna_por_nombre,
     _registro_ya_guardado, _id_amigable, _ya_procesado, _solo_digitos, _quitar_acentos,
     parse_numero, _es_fecha_valida, _reservar_mensaje, _buscar_duplicado_reciente,
+    _con_reintento, _es_error_de_cuota,
 )
 from motor_formularios import (
     FORM_SPECS, _construir_blocks_formulario, _abrir_formulario_generico,
@@ -82,15 +83,12 @@ def _autocompletar_cliente(cedula_digitos):
 
 # ============ NUEVO COMANDO /contactar (migrado al Motor Genérico - Fase 3) ============
 def _abrir_hoja_contactados():
-    # Conexión compartida (una sola por proceso — ver get_cliente_busqueda en config.py),
-    # en vez de armar una conexión nueva desde cero cada vez que se llama esta función.
-    cliente = get_cliente_busqueda()
-    spreadsheet = cliente.open_by_key(os.environ["SHEET_ID"])
-    for ws in spreadsheet.worksheets():
-        if ws.title.strip().lower() == "contactados":
-            return ws
-    print(f"❌ No se encontró la hoja 'Contactados'. Hojas disponibles: {[ws.title for ws in spreadsheet.worksheets()]}")
-    return None
+    # Pestaña cacheada (ver config.py) — ya no le pregunta a Google "cuáles son tus
+    # pestañas" en cada llamada, solo la primera vez.
+    ws = abrir_pestana_cacheada(os.environ["SHEET_ID"], "Contactados")
+    if ws is None:
+        print("❌ No se encontró la hoja 'Contactados'.")
+    return ws
 
 
 # ============ SCORE DE RIESGO DEL CLIENTE (basado en promesas cumplidas/falladas) ============
@@ -117,7 +115,10 @@ def _score_riesgo_cliente(cedula_digitos, minimo_promesas=1):
             return None
         idx_cedula, idx_estado = col_cedula - 1, col_estado - 1
         cumplidas = fallidas = 0
-        for fila in sheet.get_all_values()[1:]:
+        # _con_reintento: si Google responde "cuota excedida" en este momento puntual,
+        # reintenta un par de veces en vez de perder el score de una vez.
+        valores_hoja = _con_reintento(lambda: sheet.get_all_values())
+        for fila in valores_hoja[1:]:
             if len(fila) > idx_cedula and _solo_digitos(fila[idx_cedula]) == cedula_digitos:
                 estado = fila[idx_estado].strip() if len(fila) > idx_estado else ""
                 if estado == "Cumplida":
@@ -231,10 +232,9 @@ def ver_historial_contactar(ack, body, client):
 
 # ============ COMANDO /cobro ============
 def _abrir_hoja_pagos_recibidos_cobro():
-    # Conexión compartida (una sola por proceso — ver get_cliente_busqueda en config.py),
-    # en vez de armar una conexión nueva desde cero cada vez que se llama esta función.
-    cliente = get_cliente_busqueda()
-    return cliente.open_by_key(os.environ["SHEET_ID"]).worksheet("Pagos Recibidos")
+    # Pestaña cacheada (ver config.py) — ya no le pregunta a Google "cuáles son tus
+    # pestañas" en cada llamada, solo la primera vez.
+    return abrir_pestana_cacheada(os.environ["SHEET_ID"], "Pagos Recibidos")
 
 
 # ============ HISTORIAL RECIENTE DEL CLIENTE (contexto para quien aprueba) ============
@@ -757,15 +757,12 @@ def recibir_edicion_cobro(ack, body, client):
 
 # ============ COMANDO /domiciliar (usando el Motor Genérico) ============
 def _abrir_hoja_domiciliacion():
-    # Conexión compartida (una sola por proceso — ver get_cliente_busqueda en config.py),
-    # en vez de armar una conexión nueva desde cero cada vez que se llama esta función.
-    cliente = get_cliente_busqueda()
-    spreadsheet = cliente.open_by_key(os.environ["SHEET_ID"])
-    for ws in spreadsheet.worksheets():
-        if ws.title.strip().lower() in ("domiciliación", "domiciliacion"):
-            return ws
-    print(f"❌ No se encontró la hoja 'Domiciliación'. Hojas disponibles: {[ws.title for ws in spreadsheet.worksheets()]}")
-    return None
+    # Pestaña cacheada (ver config.py) — ya no le pregunta a Google "cuáles son tus
+    # pestañas" en cada llamada, solo la primera vez.
+    ws = abrir_pestana_cacheada(os.environ["SHEET_ID"], "Domiciliación")
+    if ws is None:
+        print("❌ No se encontró la hoja 'Domiciliación'.")
+    return ws
 
 
 def _calcular_domiciliacion(datos):
@@ -916,14 +913,14 @@ def ver_historial_domiciliar(ack, body, client):
 
 # ============ COMANDO /cobro-callcenter (Call Center Seguros) ============
 def _abrir_hoja_cobro2():
-    # Conexión compartida (una sola por proceso — ver get_cliente_busqueda en config.py),
-    # en vez de armar una conexión nueva desde cero cada vez que se llama esta función.
+    # Pestaña cacheada (ver config.py) — ya no le pregunta a Google "cuáles son tus
+    # pestañas" en cada llamada, solo la primera vez. Si por lo que sea "Hoja1" no existe
+    # (caso raro), cae de vuelta a abrir el archivo directo y usar la primera pestaña.
+    ws = abrir_pestana_cacheada(SHEET_ID_COBRO2, "Hoja1")
+    if ws is not None:
+        return ws
     cliente = get_cliente_busqueda()
-    spreadsheet = cliente.open_by_key(SHEET_ID_COBRO2)
-    try:
-        return spreadsheet.worksheet("Hoja1")
-    except Exception:
-        return spreadsheet.sheet1
+    return cliente.open_by_key(SHEET_ID_COBRO2).sheet1
 
 
 def _calcular_monto_usd(datos):
@@ -1086,15 +1083,12 @@ def ver_historial_callcenter(ack, body, client):
 
 # ============ COMANDO /conciliar (usando el Motor Genérico) ============
 def _abrir_hoja_conciliacion():
-    # Conexión compartida (una sola por proceso — ver get_cliente_busqueda en config.py),
-    # en vez de armar una conexión nueva desde cero cada vez que se llama esta función.
-    cliente = get_cliente_busqueda()
-    spreadsheet = cliente.open_by_key(os.environ["SHEET_ID"])
-    for ws in spreadsheet.worksheets():
-        if ws.title.strip().lower() in ("conciliación", "conciliacion"):
-            return ws
-    print(f"❌ No se encontró la hoja 'Conciliación'. Hojas disponibles: {[ws.title for ws in spreadsheet.worksheets()]}")
-    return None
+    # Pestaña cacheada (ver config.py) — ya no le pregunta a Google "cuáles son tus
+    # pestañas" en cada llamada, solo la primera vez.
+    ws = abrir_pestana_cacheada(os.environ["SHEET_ID"], "Conciliación")
+    if ws is None:
+        print("❌ No se encontró la hoja 'Conciliación'.")
+    return ws
 
 
 def _calcular_conciliacion(datos):
@@ -1282,13 +1276,14 @@ BASES_LIQUIDACION = ["Base 1", "Base 2", "Base 3", "Base 4"]
 
 
 def _abrir_hoja_liquidaciones():
-    # Conexión compartida (una sola por proceso — ver get_cliente_busqueda en config.py),
-    # en vez de armar una conexión nueva desde cero cada vez que se llama esta función.
+    # Pestaña cacheada (ver config.py) — ya no le pregunta a Google "cuáles son tus
+    # pestañas" en cada llamada, solo la primera vez. Si "Liquidacion VIP" no existe (caso
+    # raro), cae de vuelta a abrir el archivo directo y usar "Hoja1"/la primera pestaña.
+    ws = abrir_pestana_cacheada(SHEET_ID_LIQUIDACIONES, "Liquidacion VIP")
+    if ws is not None:
+        return ws
     cliente = get_cliente_busqueda()
     spreadsheet = cliente.open_by_key(SHEET_ID_LIQUIDACIONES)
-    for ws in spreadsheet.worksheets():
-        if _normalizar_encabezado(ws.title) == _normalizar_encabezado("Liquidacion VIP"):
-            return ws
     try:
         return spreadsheet.worksheet("Hoja1")
     except Exception:
@@ -1570,13 +1565,14 @@ def ver_historial_liquidacion_estatus(ack, body, client):
 
 # ============ COMANDO /cobro-comercial (Equipo Comercial) ============
 def _abrir_hoja_comercial():
-    # Conexión compartida (una sola por proceso — ver get_cliente_busqueda en config.py),
-    # en vez de armar una conexión nueva desde cero cada vez que se llama esta función.
+    # Pestaña cacheada (ver config.py) — ya no le pregunta a Google "cuáles son tus
+    # pestañas" en cada llamada, solo la primera vez. Si "Pagos" no existe (caso raro), cae
+    # de vuelta a abrir el archivo directo y usar "Sheet1"/la primera pestaña.
+    ws = abrir_pestana_cacheada(SHEET_ID_COMERCIAL, "Pagos")
+    if ws is not None:
+        return ws
     cliente = get_cliente_busqueda()
     spreadsheet = cliente.open_by_key(SHEET_ID_COMERCIAL)
-    for ws in spreadsheet.worksheets():
-        if ws.title.strip().lower() == "pagos":
-            return ws
     try:
         return spreadsheet.worksheet("Sheet1")
     except Exception:
@@ -1726,15 +1722,12 @@ def ver_historial_comercial(ack, body, client):
 
 # ============ COMANDO /contacto-legal (Equipo Legal) — usando el Motor Genérico ============
 def _abrir_hoja_contactados_legal():
-    # Conexión compartida (una sola por proceso — ver get_cliente_busqueda en config.py),
-    # en vez de armar una conexión nueva desde cero cada vez que se llama esta función.
-    cliente = get_cliente_busqueda()
-    spreadsheet = cliente.open_by_key(SHEET_ID_LEGAL)
-    for ws in spreadsheet.worksheets():
-        if ws.title.strip().lower() == "contactados":
-            return ws
-    print(f"❌ No se encontró la hoja 'Contactados'. Hojas disponibles: {[ws.title for ws in spreadsheet.worksheets()]}")
-    return None
+    # Pestaña cacheada (ver config.py) — ya no le pregunta a Google "cuáles son tus
+    # pestañas" en cada llamada, solo la primera vez.
+    ws = abrir_pestana_cacheada(SHEET_ID_LEGAL, "Contactados")
+    if ws is None:
+        print("❌ No se encontró la hoja 'Contactados'.")
+    return ws
 
 
 # ============ MENSAJE REDISEÑADO (mismo estilo que /contactar) ============
@@ -1903,15 +1896,12 @@ def listar_ids(ack, body, client):
 # ============ COMANDO /clientes-escalados (usando el Motor Genérico) ============
 # Columnas: Fecha, Nombre del cliente, Teléfono, Cédula, Empresa, Incidencia, Reportada por
 def _abrir_hoja_escalados():
-    # Conexión compartida (una sola por proceso — ver get_cliente_busqueda en config.py),
-    # en vez de armar una conexión nueva desde cero cada vez que se llama esta función.
-    cliente = get_cliente_busqueda()
-    spreadsheet = cliente.open_by_key(SHEET_ID_ESCALADOS)
-    for ws in spreadsheet.worksheets():
-        if ws.title.strip().lower() == "clientes escalados":
-            return ws
-    print(f"❌ No se encontró la hoja 'Clientes escalados'. Hojas disponibles: {[ws.title for ws in spreadsheet.worksheets()]}")
-    return None
+    # Pestaña cacheada (ver config.py) — ya no le pregunta a Google "cuáles son tus
+    # pestañas" en cada llamada, solo la primera vez.
+    ws = abrir_pestana_cacheada(SHEET_ID_ESCALADOS, "Clientes escalados")
+    if ws is None:
+        print("❌ No se encontró la hoja 'Clientes escalados'.")
+    return ws
 
 
 # ============ MENSAJE REDISEÑADO (mismo estilo que el resto de comandos rediseñados) ============
@@ -2204,24 +2194,13 @@ _CACHE_TASA_HOY = {"valor": None, "fecha": None, "expira": None}
 
 def _abrir_indicadores():
     """Abre la hoja 'Indicadores'. Devuelve None si hay cualquier problema (nunca lanza error).
-    Ya no la usa ninguna función de la tasa del día (ver comentario arriba)."""
-    try:
-        cliente = get_cliente_busqueda()
-        spreadsheet = cliente.open_by_key(os.environ["SHEET_ID"])
-        pestanas = spreadsheet.worksheets()
-        objetivo = _normalizar_encabezado(PESTANA_INDICADORES)
-        for ws in pestanas:
-            if _normalizar_encabezado(ws.title) == objetivo:
-                return ws
-        # No la encontró ni siquiera ignorando mayúsculas/tildes/espacios de más — se imprime
-        # repr() de cada nombre real para poder detectar caracteres invisibles (ej. un espacio
-        # de no separación) que no se ven en Google Sheets pero sí rompen la comparación.
-        print(f"⚠️ Tasa: no se encontró la hoja '{PESTANA_INDICADORES}'. "
-              f"Pestañas encontradas en el Sheet: {[repr(ws.title) for ws in pestanas]}")
-        return None
-    except Exception as e:
-        print(f"⚠️ Tasa: error abriendo 'Indicadores': {type(e).__name__}: {e}")
-        return None
+    Ya no la usa ninguna función de la tasa del día (ver comentario arriba). Pestaña
+    cacheada (ver config.py) — ya no le pregunta a Google "cuáles son tus pestañas" en
+    cada llamada, solo la primera vez."""
+    ws = abrir_pestana_cacheada(os.environ["SHEET_ID"], PESTANA_INDICADORES)
+    if ws is None:
+        print(f"⚠️ Tasa: no se encontró la hoja '{PESTANA_INDICADORES}'.")
+    return ws
 
 
 def _guardar_tasa_dia(valor_num):
@@ -2241,18 +2220,13 @@ def _guardar_tasa_dia(valor_num):
 
 
 def _abrir_historial_tasas():
-    """Abre la pestaña de historial de tasas (mismo Sheet que 'Indicadores'). None si hay problema."""
-    try:
-        cliente = get_cliente_busqueda()
-        spreadsheet = cliente.open_by_key(os.environ["SHEET_ID"])
-        for ws in spreadsheet.worksheets():
-            if ws.title.strip().lower() == PESTANA_HISTORIAL_TASAS.lower():
-                return ws
-        print(f"⚠️ Historial Tasas: no se encontró la pestaña '{PESTANA_HISTORIAL_TASAS}'")
-        return None
-    except Exception as e:
-        print(f"⚠️ Historial Tasas: error abriendo la pestaña: {type(e).__name__}: {e}")
-        return None
+    """Abre la pestaña de historial de tasas (mismo Sheet que 'Indicadores'). None si hay
+    problema. Pestaña cacheada (ver config.py) — ya no le pregunta a Google "cuáles son
+    tus pestañas" en cada llamada, solo la primera vez."""
+    ws = abrir_pestana_cacheada(os.environ["SHEET_ID"], PESTANA_HISTORIAL_TASAS)
+    if ws is None:
+        print(f"⚠️ Historial Tasas: no se encontró la pestaña '{PESTANA_HISTORIAL_TASAS}'.")
+    return ws
 
 
 def _buscar_columnas_historial_tasas(ws):
