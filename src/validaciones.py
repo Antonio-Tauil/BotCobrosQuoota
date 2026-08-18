@@ -280,6 +280,20 @@ def _es_cedula_valida(texto):
     return True, ""
 
 
+def _es_texto_no_vacio(texto):
+    """Para campos de texto libre que SÍ son obligatorios (ej. 'Nombre del Cliente') pero no
+    tenían ningún validador — Slack exige que el campo no esté vacío, pero acepta un solo
+    espacio en blanco como 'lleno', y eso se guarda en el Sheet como una celda que se ve
+    vacía (así aparecieron varias filas de 'Contactados' con Nombre en blanco pero cédula,
+    teléfono y cobrador sí completos). Este validador exige texto de verdad, no solo espacios."""
+    t = str(texto or "").strip()
+    if not t:
+        return False, "Este campo no puede quedar vacío (o solo con espacios en blanco)."
+    if len(t) < 2:
+        return False, "Este campo parece incompleto (muy corto). Revisa que esté completo."
+    return True, ""
+
+
 def _es_telefono_valido(texto):
     t = str(texto or "").strip()
     if not t:
@@ -342,6 +356,7 @@ _VALIDADORES = {
     "telefono": _es_telefono_valido,
     "fecha": _es_fecha_valida,
     "monto": _es_monto_valido,
+    "requerido": _es_texto_no_vacio,
 }
 
 
