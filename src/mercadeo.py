@@ -9,9 +9,10 @@ import json
 import gspread
 from datetime import datetime
 from zoneinfo import ZoneInfo
-from google.oauth2.service_account import Credentials
 
-from config import app, SHEET_ID_MERCADEO, CANAL_MERCADEO_PAGOS, CANAL_MERCADEO_INCIDENCIAS
+from config import (
+    app, SHEET_ID_MERCADEO, CANAL_MERCADEO_PAGOS, CANAL_MERCADEO_INCIDENCIAS, get_cliente_busqueda,
+)
 from validaciones import (
     _normalizar_encabezado, _guardar_fila_por_encabezado, _registro_ya_guardado,
     _id_amigable, _ya_procesado, parse_numero, _validar_view, _reservar_mensaje,
@@ -27,13 +28,9 @@ from cobros import _tasa_de_pago, TASA_CAMBIO_ALERTA
 
 # ============ MÓDULO DE MERCADEO (Conciliación de Pagos e Incidencias Técnicas) ============
 def _abrir_hoja_mercadeo(nombre_pestana):
-    creds_json = json.loads(os.environ["GOOGLE_CREDENTIALS"])
-    creds_json["private_key"] = creds_json["private_key"].replace("\\n", "\n")
-    creds = Credentials.from_service_account_info(
-        creds_json,
-        scopes=["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-    )
-    cliente = gspread.authorize(creds)
+    # Conexión compartida (una sola por proceso — ver get_cliente_busqueda en config.py),
+    # en vez de armar una conexión nueva desde cero cada vez que se llama esta función.
+    cliente = get_cliente_busqueda()
     spreadsheet = cliente.open_by_key(SHEET_ID_MERCADEO)
     try:
         return spreadsheet.worksheet(nombre_pestana)
