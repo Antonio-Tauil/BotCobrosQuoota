@@ -4,6 +4,7 @@ evitar guardar el mismo registro dos veces, guardar/leer en el Sheet por NOMBRE 
 (no por posición), y validar cédula/teléfono/fecha en los formularios.
 """
 import re
+import time
 import unicodedata
 import threading
 from datetime import datetime, date, timedelta
@@ -61,7 +62,11 @@ def _registro_ya_guardado(sheet, registro_id):
         return False
     objetivo = str(registro_id).strip()
     try:
-        valores = sheet.get_all_values()
+        # _con_reintento: revisar duplicados es de lo más frecuente que hace el bot (se
+        # llama antes de guardar CUALQUIER cobro) — vale la pena reintentar si Google
+        # responde "cuota excedida" en ese momento puntual, en vez de asumir "no hay
+        # duplicado" solo porque la lectura falló.
+        valores = _con_reintento(lambda: sheet.get_all_values())
         if not valores:
             return False
         encabezados = [c.strip().lower() for c in valores[0]]
@@ -153,7 +158,7 @@ def _buscar_duplicado_reciente(sheet, columna_valor, columna_fecha, valor, modo=
         if not objetivo:
             return None
         lunes = _inicio_semana_actual()
-        valores = sheet.get_all_values()
+        valores = _con_reintento(lambda: sheet.get_all_values())
         idx_valor, idx_fecha = col_valor - 1, col_fecha - 1
         for fila in valores[1:]:
             if len(fila) <= max(idx_valor, idx_fecha):
@@ -193,7 +198,7 @@ def _guardar_fila_por_encabezado(sheet, datos):
     agrega al final de la fila, siempre en el mismo orden, para no perder el dato ni desalinear
     las columnas que sí existen.
     """
-    encabezados_sheet = sheet.row_values(1)
+    encabezados_sheet = _con_reintento(lambda: sheet.row_values(1))
     restantes = dict(datos)
     fila = []
     for encabezado in encabezados_sheet:
@@ -206,7 +211,10 @@ def _guardar_fila_por_encabezado(sheet, datos):
         fila.append(valor_encontrado)
     # Cualquier dato que no tenía columna con ese nombre se agrega al final (siempre el mismo orden)
     fila.extend(restantes.values())
-    sheet.append_row(fila)
+    # _con_reintento: este es el guardado real de un cobro/contacto/etc. — el paso más
+    # importante de todos para reintentar si Google responde "cuota excedida" en ese
+    # momento puntual, en vez de perder el registro por las puras.
+    _con_reintento(lambda: sheet.append_row(fila))
 
 
 
@@ -214,11 +222,44 @@ def _columna_por_nombre(ws, nombre):
     """Ubica por NOMBRE (no por posición) el índice base-1 de una columna, comparando
     ignorando mayúsculas, tildes y espacios de más. Devuelve None si no la encuentra."""
     objetivo = _normalizar_encabezado(nombre)
-    encabezados = [_normalizar_encabezado(c) for c in ws.row_values(1)]
+    encabezados = [_normalizar_encabezado(c) for c in _con_reintento(lambda: ws.row_values(1))]
     if objetivo in encabezados:
         return encabezados.index(objetivo) + 1
     return None
 # ============ FIN GUARDAR POR NOMBRE DE COLUMNA ============
+
+
+# ============ REINTENTO ANTE CUOTA EXCEDIDA DE GOOGLE SHEETS (compartido) ============
+# Antes esto solo vivía en reportes.py (para los reportes semanales/mensuales). Se movió
+# aquí para que CUALQUIER parte del bot pueda usarlo — sobre todo los caminos "calientes"
+# como guardar un cobro o revisar duplicados, que son los que más sufren cuando hay una
+# ráfaga de actividad y Google empieza a responder '429 Quota exceeded'.
+def _es_error_de_cuota(e):
+    """True si el error es un '429 Quota exceeded' de Google Sheets (demasiadas consultas
+    por minuto) — ese caso sí vale la pena reintentar un poco después. Cualquier otro tipo
+    de error (credenciales, hoja no encontrada, etc.) no se reintenta, porque esperar no
+    lo va a arreglar."""
+    texto = str(e)
+    return "429" in texto or "Quota exceeded" in texto or "RESOURCE_EXHAUSTED" in texto
+
+
+def _con_reintento(func, intentos=3, espera_inicial=5):
+    """Ejecuta 'func' (sin argumentos). Si Google Sheets responde '429 Quota exceeded'
+    (se hicieron demasiadas consultas seguidas), espera un poco y lo intenta de nuevo,
+    esperando cada vez más (5s, luego 15s) antes de rendirse. Esto evita que una ráfaga
+    de lecturas/escrituras pierda datos por las puras."""
+    espera = espera_inicial
+    for intento in range(intentos):
+        try:
+            return func()
+        except Exception as e:
+            if not _es_error_de_cuota(e) or intento == intentos - 1:
+                raise
+            print(f"⚠️ Google Sheets pidió esperar (cuota excedida), "
+                  f"reintentando en {espera}s (intento {intento + 1}/{intentos})...")
+            time.sleep(espera)
+            espera *= 3
+# ============ FIN REINTENTO ANTE CUOTA EXCEDIDA ============
 
 
 # ============ LISTA DE COBRADORES (compartida) ============
