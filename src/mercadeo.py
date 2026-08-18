@@ -599,7 +599,7 @@ FORM_SPECS["reportar_incidencia"] = {
 @app.command("/incidencia-fullcode")
 def reportar_incidencia_fullcode(ack, body, client):
     ack()
-    _abrir_formulario_generico("reportar_incidencia", body["trigger_id"], client)
+    _abrir_formulario_generico("reportar_incidencia", body["trigger_id"], client, usuario_id=body["user_id"], canal_id=body["channel_id"])
 
 
 @app.view("form_reportar_incidencia")
