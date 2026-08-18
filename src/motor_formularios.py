@@ -327,18 +327,38 @@ def _construir_blocks_formulario(spec, valores_view=None, texto_extra=None):
     return blocks
 
 
-def _abrir_formulario_generico(nombre_spec, trigger_id, client):
+def _abrir_formulario_generico(nombre_spec, trigger_id, client, usuario_id=None, canal_id=None):
+    """Abre el modal del comando 'nombre_spec'. El 'trigger_id' que manda Slack solo es
+    válido por ~3 segundos y solo se puede usar UNA vez — si el bot está ocupado en ese
+    momento (por ejemplo, esperando a que se le pase una cuota excedida de Google Sheets en
+    otro hilo) y se pasa de ese tiempo, Slack responde con un error genérico ('fatal_error',
+    'expired_trigger_id', etc.) en vez de abrir el modal. Nunca se debe dejar esto como un
+    error sin manejar en los logs: si 'usuario_id'/'canal_id' se pasan (los mandan casi todos
+    los comandos), se le avisa a la persona con un mensaje corto para que lo intente de
+    nuevo, en vez de que el modal simplemente no aparezca sin explicación."""
     spec = FORM_SPECS[nombre_spec]
-    client.views_open(
-        trigger_id=trigger_id,
-        view={
-            "type": "modal",
-            "callback_id": spec["callback_id"],
-            "title": {"type": "plain_text", "text": spec["titulo"]},
-            "submit": {"type": "plain_text", "text": "Enviar"},
-            "blocks": _construir_blocks_formulario(spec),
-        }
-    )
+    try:
+        client.views_open(
+            trigger_id=trigger_id,
+            view={
+                "type": "modal",
+                "callback_id": spec["callback_id"],
+                "title": {"type": "plain_text", "text": spec["titulo"]},
+                "submit": {"type": "plain_text", "text": "Enviar"},
+                "blocks": _construir_blocks_formulario(spec),
+            }
+        )
+    except Exception as e:
+        print(f"⚠️ [{nombre_spec}] No se pudo abrir el modal (trigger_id probablemente vencido): {e}")
+        if usuario_id and canal_id:
+            try:
+                client.chat_postEphemeral(
+                    channel=canal_id, user=usuario_id,
+                    text="⚠️ No se pudo abrir el formulario a tiempo (el bot estaba ocupado un instante). "
+                         "Por favor vuelve a escribir el comando."
+                )
+            except Exception as e2:
+                print(f"⚠️ [{nombre_spec}] Tampoco se pudo avisar por Slack: {e2}")
 
 
 def _validar_formulario_generico(nombre_spec, valores_view):
@@ -702,6 +722,14 @@ def _editar_generico(nombre_spec, body, client):
         )
     except Exception as e:
         print(f"⚠️ [{nombre_spec}] No se pudo abrir el formulario de edición: {e}")
+        try:
+            client.chat_postEphemeral(
+                channel=body["channel"]["id"], user=body["user"]["id"],
+                text="⚠️ No se pudo abrir el formulario de edición a tiempo (el bot estaba ocupado un instante). "
+                     "Por favor intenta presionar '✏️ Editar' de nuevo."
+            )
+        except Exception as e2:
+            print(f"⚠️ [{nombre_spec}] Tampoco se pudo avisar por Slack: {e2}")
 
 
 @app.view("editar_generico_formulario")
