@@ -28,6 +28,7 @@ from motor_formularios import (
     _construir_handler_historial, _registrar_metrica, _construir_handler_autocompletar,
     _valores_view_desde_metadata, _registrar_aprobacion_para_deshacer, _ejecutar_deshacer,
     _ultima_aprobacion_deshacible, _ULTIMAS_APROBACIONES, _DESHACER_VENTANA_MINUTOS,
+    _notificar_resultado_al_reportante,
 )
 
 
@@ -579,6 +580,7 @@ def aprobar(ack, body, client):
     fecha_revision = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y")
     registro_id = _id_amigable("COBRO", body["message"]["ts"])
     resultado = "ERROR"
+    meta = {}
     try:
         meta = body["message"].get("metadata", {}).get("event_payload", {})
         resultado = guardar_en_sheet(
@@ -588,8 +590,11 @@ def aprobar(ack, body, client):
             meta.get("tasa_bcv", ""), meta.get("monto_usd", ""), registro_id)
     except Exception as e:
         print(f"Error: {e}")
+    reportado_por = meta.get("_reportado_por")
     if resultado == "DUPLICADO":
         encabezado = f"⚠️ *YA REGISTRADO* — este cobro ya estaba guardado, no se duplicó. Revisado por <@{body['user']['id']}> el {fecha_revision}"
+        _notificar_resultado_al_reportante(client, reportado_por, "Cobro", "⚠️",
+                                            "ya estaba registrado (no se duplicó)", body["user"]["id"], fecha_revision)
     else:
         encabezado = f"✅ *APROBADO* por <@{body['user']['id']}> el {fecha_revision}"
         if resultado == "OK":
@@ -606,6 +611,8 @@ def aprobar(ack, body, client):
                 "aprobado_por": body["user"]["id"],
                 "resumen": "Cobro",
             })
+            _notificar_resultado_al_reportante(client, reportado_por, "Cobro", "✅",
+                                                "fue aprobado", body["user"]["id"], fecha_revision)
     client.chat_update(
         channel=body["channel"]["id"], ts=body["message"]["ts"], text="Cobro procesado",
         blocks=[{"type": "section", "text": {"type": "mrkdwn", "text": f"{encabezado}\n\n{texto_original}"}}]
@@ -622,11 +629,14 @@ def rechazar(ack, body, client):
         return  # alguien más ya está procesando este mismo clic (doble clic o dos personas a la vez)
     _registrar_metrica("cobro", "rechazado")
     fecha_revision = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y")
+    reportado_por = body["message"].get("metadata", {}).get("event_payload", {}).get("_reportado_por")
     client.chat_update(
         channel=body["channel"]["id"], ts=body["message"]["ts"], text="Cobro RECHAZADO",
         blocks=[{"type": "section", "text": {"type": "mrkdwn",
                  "text": f"❌ *RECHAZADO* por <@{body['user']['id']}> el {fecha_revision}\n\n{texto_original}"}}]
     )
+    _notificar_resultado_al_reportante(client, reportado_por, "Cobro", "❌",
+                                        "fue rechazado", body["user"]["id"], fecha_revision)
 
 
 # ============ BOTÓN "✏️ Editar" ANTES DE APROBAR — versión propia de /cobro ============
@@ -1527,11 +1537,17 @@ def aprobar_liquidacion_estatus(ack, body, client):
         return  # alguien más ya está procesando este mismo clic (doble clic o dos personas a la vez)
     fecha_revision = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y")
     meta = body["message"].get("metadata", {}).get("event_payload", {})
+    reportado_por = meta.get("_reportado_por")
     encontrado = actualizar_estatus_liquidacion(meta.get("cedula", ""), meta.get("estatus", ""), fecha_revision)
     if encontrado:
         encabezado = f"✅ *ESTATUS ACTUALIZADO* por <@{body['user']['id']}> el {fecha_revision}"
+        _notificar_resultado_al_reportante(client, reportado_por, "Cambio de Estatus VIP", "✅",
+                                            "fue aprobada", body["user"]["id"], fecha_revision)
     else:
         encabezado = f"⚠️ *NO SE ENCONTRÓ ESA CÉDULA EN LA LISTA* (revisado por <@{body['user']['id']}> el {fecha_revision}). No se actualizó nada."
+        _notificar_resultado_al_reportante(client, reportado_por, "Cambio de Estatus VIP", "⚠️",
+                                            "no se pudo aplicar (no se encontró esa cédula en la Lista VIP)",
+                                            body["user"]["id"], fecha_revision)
     client.chat_update(
         channel=body["channel"]["id"], ts=body["message"]["ts"], text="Cambio de estatus procesado",
         blocks=[{"type": "section", "text": {"type": "mrkdwn", "text": f"{encabezado}\n\n{texto_original}"}}]
