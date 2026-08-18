@@ -8,11 +8,12 @@ import os
 import json
 from datetime import datetime
 from zoneinfo import ZoneInfo
-from config import app, get_cliente_busqueda
+from config import app, get_cliente_busqueda, abrir_pestana_cacheada, guardar_pestana_en_cache
 from validaciones import (
     _validar_view, _registro_ya_guardado, _guardar_fila_por_encabezado, _id_amigable,
     _ya_procesado, _reservar_mensaje, _buscar_duplicado_reciente,
     _normalizar_para_comparar, _columna_por_nombre, _solo_digitos, parse_numero,
+    _con_reintento,
 )
 
 FORM_SPECS = {}
@@ -44,14 +45,19 @@ def _abrir_hoja_metricas():
     a mano de antemano. Si por lo que sea no se puede ni abrir ni crear (permisos, Sheets
     caído, etc.), devuelve None y el resto del código cae de vuelta al contador en memoria
     como respaldo. Nunca lanza error."""
+    # Primero, la pestaña cacheada (ver config.py) — ya no le pregunta a Google
+    # "cuáles son tus pestañas" en cada llamada, solo la primera vez que se encuentra.
+    ws = abrir_pestana_cacheada(os.environ["SHEET_ID"], PESTANA_METRICAS)
+    if ws is not None:
+        return ws
+    # No estaba cacheada ni existe todavía — se crea una sola vez y se guarda en la
+    # misma caché, para que de aquí en adelante tampoco vuelva a buscarla.
     try:
         cliente = get_cliente_busqueda()
         spreadsheet = cliente.open_by_key(os.environ["SHEET_ID"])
-        for ws in spreadsheet.worksheets():
-            if ws.title.strip().lower() == PESTANA_METRICAS.lower():
-                return ws
         ws = spreadsheet.add_worksheet(title=PESTANA_METRICAS, rows=500, cols=5)
         ws.update("A1:E1", [["Fecha", "Comando", "Enviado", "Aprobado", "Rechazado"]])
+        guardar_pestana_en_cache(os.environ["SHEET_ID"], PESTANA_METRICAS, ws)
         print(f"✅ Se creó la pestaña '{PESTANA_METRICAS}' (primera vez que se usa).")
         return ws
     except Exception as e:
@@ -70,7 +76,8 @@ def _numero_celda(fila, idx):
 def _fila_metricas(ws, fecha, comando):
     """Devuelve (numero_de_fila, valores_de_la_fila) para (fecha, comando) en 'ws', o
     (None, None) si esa combinación todavía no tiene fila."""
-    for i, fila in enumerate(ws.get_all_values()[1:], start=2):
+    valores = _con_reintento(lambda: ws.get_all_values())
+    for i, fila in enumerate(valores[1:], start=2):
         if len(fila) >= 2 and fila[0].strip() == fecha and fila[1].strip() == comando:
             return i, fila
     return None, None
@@ -101,10 +108,11 @@ def _registrar_metrica(nombre_spec, tipo):
         if fila_num is None:
             conteo = {"enviado": 0, "aprobado": 0, "rechazado": 0}
             conteo[tipo] = 1
-            ws.append_row([hoy, nombre_spec, conteo["enviado"], conteo["aprobado"], conteo["rechazado"]])
+            _con_reintento(lambda: ws.append_row(
+                [hoy, nombre_spec, conteo["enviado"], conteo["aprobado"], conteo["rechazado"]]))
         else:
             valor_actual = _numero_celda(fila_actual, col - 1)
-            ws.update_cell(fila_num, col, valor_actual + 1)
+            _con_reintento(lambda: ws.update_cell(fila_num, col, valor_actual + 1))
     except Exception as e:
         print(f"⚠️ No se pudo guardar la métrica en el Sheet ({nombre_spec}/{tipo}): {e}")
 
@@ -118,7 +126,8 @@ def _leer_metricas_del_dia(hoy):
         ws = _abrir_hoja_metricas()
         if ws is not None:
             dia = {}
-            for fila in ws.get_all_values()[1:]:
+            valores = _con_reintento(lambda: ws.get_all_values())
+            for fila in valores[1:]:
                 if len(fila) >= 2 and fila[0].strip() == hoy:
                     dia[fila[1].strip()] = {
                         "enviado": _numero_celda(fila, 2),
