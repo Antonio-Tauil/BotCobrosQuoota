@@ -202,7 +202,7 @@ FORM_SPECS["contactar"] = {
 @app.command("/contactar")
 def reportar_contacto(ack, body, client):
     ack()
-    _abrir_formulario_generico("contactar", body["trigger_id"], client)
+    _abrir_formulario_generico("contactar", body["trigger_id"], client, usuario_id=body["user_id"], canal_id=body["channel_id"])
 
 
 @app.view("form_contactar")
@@ -351,7 +351,7 @@ FORM_SPECS["cobro"] = {
 @app.command("/cobro")
 def reportar_cobro(ack, body, client):
     ack()
-    _abrir_formulario_generico("cobro", body["trigger_id"], client)
+    _abrir_formulario_generico("cobro", body["trigger_id"], client, usuario_id=body["user_id"], canal_id=body["channel_id"])
 
 
 # ============ BOTÓN "Ver historial del cliente" DENTRO DEL MODAL DE /cobro ============
@@ -677,6 +677,14 @@ def editar_cobro(ack, body, client):
         )
     except Exception as e:
         print(f"⚠️ [cobro] No se pudo abrir el formulario de edición: {e}")
+        try:
+            client.chat_postEphemeral(
+                channel=body["channel"]["id"], user=body["user"]["id"],
+                text="⚠️ No se pudo abrir el formulario de edición a tiempo (el bot estaba ocupado un instante). "
+                     "Por favor intenta presionar '✏️ Editar' de nuevo."
+            )
+        except Exception as e2:
+            print(f"⚠️ [cobro] Tampoco se pudo avisar por Slack: {e2}")
 
 
 @app.view("editar_cobro_formulario")
@@ -881,7 +889,7 @@ FORM_SPECS["domiciliar"] = {
 @app.command("/domiciliar")
 def reportar_domiciliacion(ack, body, client):
     ack()
-    _abrir_formulario_generico("domiciliar", body["trigger_id"], client)
+    _abrir_formulario_generico("domiciliar", body["trigger_id"], client, usuario_id=body["user_id"], canal_id=body["channel_id"])
 
 
 @app.view("form_domiciliar")
@@ -1044,7 +1052,7 @@ FORM_SPECS["cobro_callcenter"] = {
 @app.command("/cobro-callcenter")
 def reportar_cobro2(ack, body, client):
     ack()
-    _abrir_formulario_generico("cobro_callcenter", body["trigger_id"], client)
+    _abrir_formulario_generico("cobro_callcenter", body["trigger_id"], client, usuario_id=body["user_id"], canal_id=body["channel_id"])
 
 
 @app.view("form_cobro2")
@@ -1229,7 +1237,7 @@ FORM_SPECS["conciliar"] = {
 @app.command("/conciliar")
 def reportar_conciliacion(ack, body, client):
     ack()
-    _abrir_formulario_generico("conciliar", body["trigger_id"], client)
+    _abrir_formulario_generico("conciliar", body["trigger_id"], client, usuario_id=body["user_id"], canal_id=body["channel_id"])
 
 
 @app.view("form_conciliar")
@@ -1392,7 +1400,7 @@ def actualizar_estatus_liquidacion(cedula, nuevo_estatus, fecha_actualizacion):
 @app.command("/liquidacion-nueva")
 def reportar_liquidacion_nueva(ack, body, client):
     ack()
-    _abrir_formulario_generico("liquidacion_nueva", body["trigger_id"], client)
+    _abrir_formulario_generico("liquidacion_nueva", body["trigger_id"], client, usuario_id=body["user_id"], canal_id=body["channel_id"])
 
 
 @app.view("form_liquidacion_nueva")
@@ -1513,7 +1521,7 @@ FORM_SPECS["liquidacion_estatus"] = {
 @app.command("/liquidacion-estatus")
 def reportar_liquidacion_estatus(ack, body, client):
     ack()
-    _abrir_formulario_generico("liquidacion_estatus", body["trigger_id"], client)
+    _abrir_formulario_generico("liquidacion_estatus", body["trigger_id"], client, usuario_id=body["user_id"], canal_id=body["channel_id"])
 
 
 @app.view("form_liquidacion_estatus")
@@ -1690,7 +1698,7 @@ FORM_SPECS["cobro_comercial"] = {
 @app.command("/cobro-comercial")
 def reportar_cobro_comercial(ack, body, client):
     ack()
-    _abrir_formulario_generico("cobro_comercial", body["trigger_id"], client)
+    _abrir_formulario_generico("cobro_comercial", body["trigger_id"], client, usuario_id=body["user_id"], canal_id=body["channel_id"])
 
 
 @app.view("form_cobro_comercial")
@@ -1807,7 +1815,7 @@ FORM_SPECS["contacto_legal"] = {
 @app.command("/contacto-legal")
 def reportar_contacto_legal(ack, body, client):
     ack()
-    _abrir_formulario_generico("contacto_legal", body["trigger_id"], client)
+    _abrir_formulario_generico("contacto_legal", body["trigger_id"], client, usuario_id=body["user_id"], canal_id=body["channel_id"])
 
 
 @app.view("form_contacto_legal")
@@ -1974,7 +1982,7 @@ FORM_SPECS["clientes_escalados"] = {
 @app.command("/clientes-escalados")
 def reportar_cliente_escalado(ack, body, client):
     ack()
-    _abrir_formulario_generico("clientes_escalados", body["trigger_id"], client)
+    _abrir_formulario_generico("clientes_escalados", body["trigger_id"], client, usuario_id=body["user_id"], canal_id=body["channel_id"])
 
 
 @app.view("form_cliente_escalado")
