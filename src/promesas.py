@@ -7,10 +7,8 @@ generar_cierre_diario() las usa scheduler.py para programarlas todos los días.
 import os
 import re
 import json
-import gspread
 from datetime import datetime, date, timedelta
 from zoneinfo import ZoneInfo
-from google.oauth2.service_account import Credentials
 
 from config import app, CANAL_SEGUIMIENTO, CANAL_CIERRE, SUPERVISOR_ID, get_cliente_busqueda
 from validaciones import _solo_digitos, parse_numero
@@ -126,13 +124,9 @@ def generar_resumen_promesas():
     """Lee 'Contactados', agrupa promesas por cobrador y publica el resumen."""
     _marcar_inicio_reporte("Radar de Promesas")
     try:
-        creds_json = json.loads(os.environ["GOOGLE_CREDENTIALS"])
-        creds_json["private_key"] = creds_json["private_key"].replace("\\n", "\n")
-        creds = Credentials.from_service_account_info(
-            creds_json,
-            scopes=["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-        )
-        cliente = gspread.authorize(creds)
+        # Conexión compartida (una sola por proceso — ver get_cliente_busqueda en config.py),
+        # en vez de armar una conexión nueva desde cero cada vez que se llama esta función.
+        cliente = get_cliente_busqueda()
         spreadsheet = cliente.open_by_key(os.environ["SHEET_ID"])
         sheet = None
         for ws in spreadsheet.worksheets():
