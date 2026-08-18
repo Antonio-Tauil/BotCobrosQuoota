@@ -240,14 +240,14 @@ def elegir_tipo_mercadeo(ack, body):
 @app.view("form_merca_conciliacion")
 def recibir_conciliacion_mercadeo(ack, body, client):
     _v = body["view"]["state"]["values"]
-    _err = _validar_view(_v, [('telefono', 'telefono'), ('cedula', 'cedula'), ('fecha_pago', 'fecha'),
-                               ('monto_bs', 'monto'), ('tasa_bcv', 'monto')])
+    _err = _validar_view(_v, [('nombre_colaborador', 'requerido'), ('telefono', 'telefono'), ('cedula', 'cedula'),
+                               ('fecha_pago', 'fecha'), ('monto_bs', 'monto'), ('tasa_bcv', 'monto')])
     if _err:
         ack(response_action="errors", errors=_err)
         return
     ack()
     valores = body["view"]["state"]["values"]
-    nombre_colaborador = valores["nombre_colaborador"]["valor"]["value"]
+    nombre_colaborador = valores["nombre_colaborador"]["valor"]["value"].strip()
     telefono = valores["telefono"]["valor"]["value"]
     cedula = valores["cedula"]["valor"]["value"]
     monto_bs_str = valores["monto_bs"]["valor"]["value"]
@@ -421,13 +421,13 @@ def rechazar_merca_conciliacion(ack, body, client):
 @app.view("form_merca_incidencia")
 def recibir_incidencia_mercadeo(ack, body, client):
     _v = body["view"]["state"]["values"]
-    _err = _validar_view(_v, [('cedula', 'cedula')])
+    _err = _validar_view(_v, [('nombre', 'requerido'), ('cedula', 'cedula')])
     if _err:
         ack(response_action="errors", errors=_err)
         return
     ack()
     valores = body["view"]["state"]["values"]
-    nombre = valores["nombre"]["valor"]["value"]
+    nombre = valores["nombre"]["valor"]["value"].strip()
     cedula = valores["cedula"]["valor"]["value"]
     empresa = valores["empresa"]["valor"]["value"]
     incidencia = valores["incidencia"]["valor"]["selected_option"]["value"]
