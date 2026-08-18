@@ -40,8 +40,8 @@ def _abrir_hoja_mercadeo(nombre_pestana):
     return ws
 
 
-def guardar_conciliacion_mercadeo(fecha_reporte, nombre_colaborador, telefono, cedula, monto_bs, forma_pago,
-                                   banco, fecha_pago, monto_usd, tasa_bcv, referencia, estado, revisor,
+def guardar_conciliacion_mercadeo(fecha_reporte, nombre_colaborador, numero_quoota, telefono, cedula, monto_bs,
+                                   forma_pago, banco, fecha_pago, monto_usd, tasa_bcv, referencia, estado, revisor,
                                    fecha_revision, registro_id):
     try:
         sheet = _abrir_hoja_mercadeo("Conciliacion")
@@ -51,6 +51,7 @@ def guardar_conciliacion_mercadeo(fecha_reporte, nombre_colaborador, telefono, c
         datos = {
             "Fecha de Reporte": fecha_reporte,
             "Nombre de Colaborador": nombre_colaborador,
+            "Numero de Quoota": numero_quoota,
             "Telefono": telefono,
             "Cedula": cedula,
             "Monto en Bs": monto_bs,
@@ -143,6 +144,9 @@ def _vista_form_conciliacion_mercadeo():
         "blocks": [
             {"type": "input", "block_id": "nombre_colaborador",
              "label": {"type": "plain_text", "text": "Nombre de Colaborador"},
+             "element": {"type": "plain_text_input", "action_id": "valor"}},
+            {"type": "input", "block_id": "numero_quoota",
+             "label": {"type": "plain_text", "text": "Número de Quoota"},
              "element": {"type": "plain_text_input", "action_id": "valor"}},
             {"type": "input", "block_id": "telefono",
              "label": {"type": "plain_text", "text": "Teléfono"},
@@ -240,7 +244,8 @@ def elegir_tipo_mercadeo(ack, body):
 @app.view("form_merca_conciliacion")
 def recibir_conciliacion_mercadeo(ack, body, client):
     _v = body["view"]["state"]["values"]
-    _err = _validar_view(_v, [('nombre_colaborador', 'requerido'), ('telefono', 'telefono'), ('cedula', 'cedula'),
+    _err = _validar_view(_v, [('nombre_colaborador', 'requerido'), ('numero_quoota', 'requerido'),
+                               ('telefono', 'telefono'), ('cedula', 'cedula'),
                                ('fecha_pago', 'fecha'), ('monto_bs', 'monto'), ('tasa_bcv', 'monto')])
     if _err:
         ack(response_action="errors", errors=_err)
@@ -248,6 +253,7 @@ def recibir_conciliacion_mercadeo(ack, body, client):
     ack()
     valores = body["view"]["state"]["values"]
     nombre_colaborador = valores["nombre_colaborador"]["valor"]["value"].strip()
+    numero_quoota = valores["numero_quoota"]["valor"]["value"].strip()
     telefono = valores["telefono"]["valor"]["value"]
     cedula = valores["cedula"]["valor"]["value"]
     monto_bs_str = valores["monto_bs"]["valor"]["value"]
@@ -287,6 +293,7 @@ def recibir_conciliacion_mercadeo(ack, body, client):
         f"──────────────────────────\n"
         f"📅 *Fecha de Reporte:* {fecha_reporte}\n"
         f"👤 *Reportado por:* <@{usuario_slack}>\n"
+        f"🔢 *Número de Quoota:* {numero_quoota}\n"
         f"📱 *Teléfono:* {telefono}\n"
         f"🏦 *Pago:* {forma_pago} · {banco}\n"
         f"💵 *Monto:* {monto_bs_fmt}  (≈ {monto_usd_fmt})\n"
@@ -333,7 +340,8 @@ def recibir_conciliacion_mercadeo(ack, body, client):
             channel=CANAL_MERCADEO_PAGOS,
             text="Nueva conciliación de pago (Mercadeo)",
             metadata={"event_type": "merca_conciliacion", "event_payload": {
-                "fecha_reporte": fecha_reporte, "nombre_colaborador": nombre_colaborador, "telefono": telefono,
+                "fecha_reporte": fecha_reporte, "nombre_colaborador": nombre_colaborador,
+                "numero_quoota": numero_quoota, "telefono": telefono,
                 "cedula": cedula, "monto_bs": monto_bs_fmt, "forma_pago": forma_pago, "banco": banco,
                 "fecha_pago": fecha_pago, "monto_usd": monto_usd_fmt, "tasa_bcv": tasa_bcv_fmt,
                 "referencia": referencia, "_reportado_por": usuario_slack}},
@@ -364,7 +372,8 @@ def aprobar_merca_conciliacion(ack, body, client):
     try:
         meta = body["message"].get("metadata", {}).get("event_payload", {})
         resultado = guardar_conciliacion_mercadeo(
-            meta.get("fecha_reporte", fecha_revision), meta.get("nombre_colaborador", ""), meta.get("telefono", ""),
+            meta.get("fecha_reporte", fecha_revision), meta.get("nombre_colaborador", ""),
+            meta.get("numero_quoota", ""), meta.get("telefono", ""),
             meta.get("cedula", ""), meta.get("monto_bs", ""), meta.get("forma_pago", ""), meta.get("banco", ""),
             meta.get("fecha_pago", ""), meta.get("monto_usd", ""), meta.get("tasa_bcv", ""), meta.get("referencia", ""),
             "Aprobado", body["user"]["id"], fecha_revision, registro_id)
