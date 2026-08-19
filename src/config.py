@@ -52,7 +52,7 @@ PESTANA_INDICADORES = "Indicadores"           # Tasa del día (vigente) — B20=
 PESTANA_HISTORIAL_TASAS = "Historial Tasas"   # Historial de tasas por fecha (columnas: Fecha, Tasa)
 # ============ FIN CONFIGURACIÓN GENERAL ============
 
-COBRADORES = ["DIEGO", "IARA", "REBECA", "MARIANGEL", "LUISMAR", "ANGELY", "DANIEL", "BARBARA", "MARIANA", "ANDRES", "NELMAYRI", "ALEJANDRO", "ISAAC"]
+COBRADORES = ["DIEGO", "IARA", "REBECA", "MARIANGEL", "LUISMAR", "ANGELY", "DANIEL", "BARBARA", "MARIANA", "ANDRES", "NELMAYRI", "ALEJANDRO", "ISAAC", "VALENTINA"]
 
 
 def _opciones_cobradores():
