@@ -8,7 +8,7 @@ import os
 import json
 from datetime import datetime
 from zoneinfo import ZoneInfo
-from config import app, get_cliente_busqueda, abrir_pestana_cacheada, guardar_pestana_en_cache
+from config import app, get_cliente_busqueda, abrir_pestana_cacheada, guardar_pestana_en_cache, SUPERVISOR_ID
 from validaciones import (
     _validar_view, _registro_ya_guardado, _guardar_fila_por_encabezado, _id_amigable,
     _ya_procesado, _reservar_mensaje, _buscar_duplicado_reciente,
@@ -198,6 +198,35 @@ def _notificar_resultado_al_reportante(client, usuario_reportante, titulo_mensaj
     except Exception as e:
         print(f"⚠️ No se pudo enviar el DM de aviso a <@{usuario_reportante}>: {e}")
 # ============ FIN DM AUTOMÁTICO A QUIEN REPORTÓ ============
+
+
+# ============ AVISO DE "APROBACIÓN FANTASMA" (aprobado en Slack, pero NO guardado) ============
+# Antes, si '_guardar_generico' fallaba después de que alguien le dio a "✅ Aprobar" (ej. la
+# hoja no se encontró, o Google Sheets siguió fallando después de los reintentos), lo único
+# que pasaba era que el mensaje en Slack decía "APROBADO pero hubo error guardando (revisar
+# logs)" — pero nadie mira los logs de Railway a diario, así que el dinero quedaba "aprobado"
+# a la vista de todos sin que NADIE se enterara de que en realidad nunca se guardó en el
+# Sheet. Ahora se avisa directo tanto a quien reportó como al supervisor, para que alguien
+# reintente el registro a mano en vez de que se pierda silenciosamente.
+def _avisar_fallo_guardado_tras_aprobar(client, usuario_reportante, titulo_mensaje, revisor_id, fecha_revision):
+    texto = (f"🔴 Se aprobó tu *{titulo_mensaje}* (revisado por <@{revisor_id}> el {fecha_revision}) "
+             "pero hubo un error guardándolo en Google Sheets — todavía NO quedó registrado. "
+             "Por favor avisa para que se registre a mano cuanto antes.")
+    if usuario_reportante:
+        try:
+            client.chat_postMessage(channel=usuario_reportante, text=texto)
+        except Exception as e:
+            print(f"⚠️ No se pudo avisar al reportante <@{usuario_reportante}> del fallo de guardado: {e}")
+    try:
+        client.chat_postMessage(
+            channel=SUPERVISOR_ID,
+            text=(f"🔴 *Robotín: '{titulo_mensaje}' se aprobó pero NO se pudo guardar en Sheets* "
+                  f"(revisado por <@{revisor_id}> el {fecha_revision}). Revisa los logs de Railway "
+                  "y regístralo a mano si hace falta.")
+        )
+    except Exception as e:
+        print(f"⚠️ No se pudo avisar al supervisor del fallo de guardado: {e}")
+# ============ FIN AVISO DE "APROBACIÓN FANTASMA" ============
 
 
 # ============ VIGILANTE DE REPORTES COLGADOS ============
@@ -624,6 +653,7 @@ def _aprobar_generico(nombre_spec, body, client):
                                             "fue aprobada", body["user"]["id"], fecha_revision)
     else:
         encabezado = f"⚠️ *APROBADO pero hubo error guardando (revisar logs)* por <@{body['user']['id']}> el {fecha_revision}"
+        _avisar_fallo_guardado_tras_aprobar(client, reportado_por, titulo_mensaje, body["user"]["id"], fecha_revision)
     client.chat_update(
         channel=body["channel"]["id"], ts=body["message"]["ts"], text=f"{spec['titulo_mensaje']} procesado",
         blocks=[{"type": "section", "text": {"type": "mrkdwn", "text": f"{encabezado}\n\n{texto_original}"}}]
