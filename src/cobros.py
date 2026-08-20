@@ -28,7 +28,7 @@ from motor_formularios import (
     _construir_handler_historial, _registrar_metrica, _construir_handler_autocompletar,
     _valores_view_desde_metadata, _registrar_aprobacion_para_deshacer, _ejecutar_deshacer,
     _ultima_aprobacion_deshacible, _ULTIMAS_APROBACIONES, _DESHACER_VENTANA_MINUTOS,
-    _notificar_resultado_al_reportante,
+    _notificar_resultado_al_reportante, _avisar_fallo_guardado_tras_aprobar,
 )
 
 
@@ -317,9 +317,9 @@ FORM_SPECS["cobro"] = {
          "tipo": "texto", "opcional": True},
         {"id": "nombre_cobrador", "label": "Nombre del Cobrador", "tipo": "select",
          "opciones": _opciones_cobradores},
-        {"id": "descripcion", "label": "Nombre del Cliente", "tipo": "texto"},
+        {"id": "descripcion", "label": "Nombre del Cliente", "tipo": "texto", "validar": "requerido"},
         {"id": "cedula", "label": "Cédula del Cliente", "tipo": "texto", "validar": "cedula"},
-        {"id": "numero", "label": "Teléfono o Referencia", "tipo": "texto"},
+        {"id": "numero", "label": "Teléfono o Referencia", "tipo": "texto", "validar": "requerido"},
         {"id": "monto_bs", "label": "Monto en Bs", "tipo": "texto", "validar": "monto"},
         {"id": "forma_pago", "label": "Forma de Pago", "tipo": "select", "opciones": [
             {"text": {"type": "plain_text", "text": "Pago Móvil"}, "value": "Pago Movil"},
@@ -485,9 +485,9 @@ def recibir_cobro(ack, body, client):
     ack()
     valores = body["view"]["state"]["values"]
     nombre_cobrador = valores["nombre_cobrador"]["valor"]["selected_option"]["value"]
-    descripcion = valores["descripcion"]["valor"]["value"]
+    descripcion = (valores["descripcion"]["valor"]["value"] or "").strip()
     cedula = valores["cedula"]["valor"]["value"]
-    numero = valores["numero"]["valor"]["value"]
+    numero = (valores["numero"]["valor"]["value"] or "").strip()
     monto_bs_str = valores["monto_bs"]["valor"]["value"]
     forma_pago = valores["forma_pago"]["valor"]["selected_option"]["value"]
     banco = valores["banco"]["valor"]["selected_option"]["value"]
@@ -595,24 +595,30 @@ def aprobar(ack, body, client):
         encabezado = f"⚠️ *YA REGISTRADO* — este cobro ya estaba guardado, no se duplicó. Revisado por <@{body['user']['id']}> el {fecha_revision}"
         _notificar_resultado_al_reportante(client, reportado_por, "Cobro", "⚠️",
                                             "ya estaba registrado (no se duplicó)", body["user"]["id"], fecha_revision)
-    else:
+    elif resultado == "OK":
         encabezado = f"✅ *APROBADO* por <@{body['user']['id']}> el {fecha_revision}"
-        if resultado == "OK":
-            _blocks_msg = body["message"].get("blocks", [])
-            _registrar_aprobacion_para_deshacer({
-                "abrir_hoja": _abrir_hoja_pagos_recibidos_cobro,
-                "columna_id_registro": "ID Registro",
-                "registro_id": registro_id,
-                "canal": body["channel"]["id"],
-                "ts": body["message"]["ts"],
-                "texto_original": texto_original,
-                "blocks_accion_original": _blocks_msg[1] if len(_blocks_msg) > 1
-                    else {"type": "actions", "elements": []},
-                "aprobado_por": body["user"]["id"],
-                "resumen": "Cobro",
-            })
-            _notificar_resultado_al_reportante(client, reportado_por, "Cobro", "✅",
-                                                "fue aprobado", body["user"]["id"], fecha_revision)
+        _blocks_msg = body["message"].get("blocks", [])
+        _registrar_aprobacion_para_deshacer({
+            "abrir_hoja": _abrir_hoja_pagos_recibidos_cobro,
+            "columna_id_registro": "ID Registro",
+            "registro_id": registro_id,
+            "canal": body["channel"]["id"],
+            "ts": body["message"]["ts"],
+            "texto_original": texto_original,
+            "blocks_accion_original": _blocks_msg[1] if len(_blocks_msg) > 1
+                else {"type": "actions", "elements": []},
+            "aprobado_por": body["user"]["id"],
+            "resumen": "Cobro",
+        })
+        _notificar_resultado_al_reportante(client, reportado_por, "Cobro", "✅",
+                                            "fue aprobado", body["user"]["id"], fecha_revision)
+    else:
+        # 'resultado' es "ERROR" (o cualquier otra cosa inesperada) — el guardado en Sheets
+        # falló DESPUÉS de que ya se le dio a "Aprobar". Antes esto se mostraba como un
+        # "✅ APROBADO" normal, sin que nadie se enterara de que en realidad nunca se guardó
+        # (ver _avisar_fallo_guardado_tras_aprobar en motor_formularios.py).
+        encabezado = f"⚠️ *APROBADO pero hubo error guardando (revisar logs)* por <@{body['user']['id']}> el {fecha_revision}"
+        _avisar_fallo_guardado_tras_aprobar(client, reportado_por, "Cobro", body["user"]["id"], fecha_revision)
     client.chat_update(
         channel=body["channel"]["id"], ts=body["message"]["ts"], text="Cobro procesado",
         blocks=[{"type": "section", "text": {"type": "mrkdwn", "text": f"{encabezado}\n\n{texto_original}"}}]
@@ -725,9 +731,9 @@ def recibir_edicion_cobro(ack, body, client):
 
     valores = body["view"]["state"]["values"]
     nombre_cobrador = valores["nombre_cobrador"]["valor"]["selected_option"]["value"]
-    descripcion = valores["descripcion"]["valor"]["value"]
+    descripcion = (valores["descripcion"]["valor"]["value"] or "").strip()
     cedula = valores["cedula"]["valor"]["value"]
-    numero = valores["numero"]["valor"]["value"]
+    numero = (valores["numero"]["valor"]["value"] or "").strip()
     monto_bs_str = valores["monto_bs"]["valor"]["value"]
     forma_pago = valores["forma_pago"]["valor"]["selected_option"]["value"]
     banco = valores["banco"]["valor"]["selected_option"]["value"]
@@ -1369,6 +1375,11 @@ FORM_SPECS["liquidacion_nueva"] = {
 
 
 def actualizar_estatus_liquidacion(cedula, nuevo_estatus, fecha_actualizacion):
+    """Devuelve 'OK', 'NO_ENCONTRADO' (la cédula no está en la Lista VIP — no es un error, el
+    usuario escribió una cédula que no existe ahí) o 'ERROR' (falló Sheets/faltan columnas —
+    esto SÍ es un error real y quien llama debe avisar, no solo mostrar 'no se encontró' como
+    si el usuario se hubiese equivocado; antes ambos casos devolvían el mismo 'False' y se
+    mostraban igual, ocultando cuándo el problema era del bot y no de la cédula escrita)."""
     try:
         sheet = _abrir_hoja_liquidaciones()
         col_cedula = _columna_por_nombre(sheet, "Cedula")
@@ -1377,7 +1388,7 @@ def actualizar_estatus_liquidacion(cedula, nuevo_estatus, fecha_actualizacion):
         if col_cedula is None or col_estatus is None or col_actualizacion is None:
             print("❌ Error actualizando estatus: faltan las columnas 'Cedula', 'Estatus' y/o "
                   "'Ultima actualizacion' en la pestaña de Liquidaciones.")
-            return False
+            return "ERROR"
         valores = sheet.get_all_values()
         cedula_buscada = str(cedula).strip()
         idx_cedula = col_cedula - 1
@@ -1389,12 +1400,12 @@ def actualizar_estatus_liquidacion(cedula, nuevo_estatus, fecha_actualizacion):
                 sheet.update_cell(num_fila, col_estatus, nuevo_estatus)
                 sheet.update_cell(num_fila, col_actualizacion, fecha_actualizacion)
                 print(f"✅ Estatus actualizado para cédula {cedula_buscada}: {nuevo_estatus}")
-                return True
+                return "OK"
         print(f"⚠️ No se encontró la cédula {cedula_buscada} en Liquidaciones")
-        return False
+        return "NO_ENCONTRADO"
     except Exception as e:
         print(f"❌ Error actualizando estatus: {type(e).__name__}: {e}")
-        return False
+        return "ERROR"
 
 
 @app.command("/liquidacion-nueva")
@@ -1546,16 +1557,22 @@ def aprobar_liquidacion_estatus(ack, body, client):
     fecha_revision = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y")
     meta = body["message"].get("metadata", {}).get("event_payload", {})
     reportado_por = meta.get("_reportado_por")
-    encontrado = actualizar_estatus_liquidacion(meta.get("cedula", ""), meta.get("estatus", ""), fecha_revision)
-    if encontrado:
+    resultado = actualizar_estatus_liquidacion(meta.get("cedula", ""), meta.get("estatus", ""), fecha_revision)
+    if resultado == "OK":
         encabezado = f"✅ *ESTATUS ACTUALIZADO* por <@{body['user']['id']}> el {fecha_revision}"
         _notificar_resultado_al_reportante(client, reportado_por, "Cambio de Estatus VIP", "✅",
                                             "fue aprobada", body["user"]["id"], fecha_revision)
-    else:
+    elif resultado == "NO_ENCONTRADO":
         encabezado = f"⚠️ *NO SE ENCONTRÓ ESA CÉDULA EN LA LISTA* (revisado por <@{body['user']['id']}> el {fecha_revision}). No se actualizó nada."
         _notificar_resultado_al_reportante(client, reportado_por, "Cambio de Estatus VIP", "⚠️",
                                             "no se pudo aplicar (no se encontró esa cédula en la Lista VIP)",
                                             body["user"]["id"], fecha_revision)
+    else:
+        # 'resultado' es "ERROR" — falló Sheets de verdad, no es que la cédula no exista.
+        # Antes esto se mostraba EXACTAMENTE igual que "no se encontró la cédula", ocultando
+        # que el problema era del bot y no de lo que escribió el usuario.
+        encabezado = f"⚠️ *APROBADO pero hubo error guardando (revisar logs)* por <@{body['user']['id']}> el {fecha_revision}"
+        _avisar_fallo_guardado_tras_aprobar(client, reportado_por, "Cambio de Estatus VIP", body["user"]["id"], fecha_revision)
     client.chat_update(
         channel=body["channel"]["id"], ts=body["message"]["ts"], text="Cambio de estatus procesado",
         blocks=[{"type": "section", "text": {"type": "mrkdwn", "text": f"{encabezado}\n\n{texto_original}"}}]
