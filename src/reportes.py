@@ -18,33 +18,34 @@ Incidencias Técnicas de Mercadeo.
 """
 import os
 import re
-import time
 from datetime import datetime, date, timedelta
 from zoneinfo import ZoneInfo
 
 from config import (
     app, SHEET_ID_MERCADEO, CANAL_CIERRE, CANAL_MERCADEO_PAGOS, CANAL_REPORTES_MENSUALES,
-    SUPERVISOR_ID, get_cliente_busqueda,
+    SUPERVISOR_ID, abrir_pestana_cacheada,
 )
-from validaciones import parse_numero, _columna_por_nombre
+from validaciones import parse_numero, _columna_por_nombre, _con_reintento, _es_error_de_cuota
 from motor_formularios import FORM_SPECS, _marcar_inicio_reporte, _marcar_fin_reporte, _reportes_colgados
 from cobros import _abrir_hoja_domiciliacion, _abrir_hoja_cobro2, _abrir_hoja_conciliacion, _abrir_hoja_comercial
 from mercadeo import _abrir_hoja_mercadeo
+# 'promesas' se importa ANTES que 'reportes' en main.py, así que para cuando este archivo se
+# carga, promesas.py ya está completamente listo — no hay import circular (promesas.py nunca
+# importa nada de aquí). Se reutiliza su mapeo de cobrador->ID de Slack y su parser de fechas
+# de promesas, en vez de duplicarlos, para /mi-actividad más abajo.
+from promesas import COBRADOR_SLACK_IDS, _cobrador_por_slack_id, _parsear_fecha_radar
 
 
 # ============ REPORTE SEMANAL DE PAGOS (lunes en la mañana) ============
 
 def _abrir_hoja_pagos_recibidos():
     """Abre la misma hoja 'Pagos Recibidos' (SHEET_ID) donde se guardan los cobros de
-    /cobro, igual que hace el Cierre Diario en promesas.py."""
-    # Conexión compartida (una sola por proceso — ver get_cliente_busqueda en config.py),
-    # en vez de armar una conexión nueva desde cero cada vez que se llama esta función.
-    cliente = get_cliente_busqueda()
-    try:
-        return cliente.open_by_key(os.environ["SHEET_ID"]).worksheet("Pagos Recibidos")
-    except Exception as e:
-        print(f"❌ Reporte semanal: no se encontró la hoja 'Pagos Recibidos': {e}")
-        return None
+    /cobro, igual que hace el Cierre Diario en promesas.py. Usa la pestaña CACHEADA (ver
+    config.py) — ya no le pregunta a Google 'cuáles son tus pestañas' en cada llamada."""
+    ws = abrir_pestana_cacheada(os.environ["SHEET_ID"], "Pagos Recibidos")
+    if ws is None:
+        print("❌ Reporte semanal: no se encontró la hoja 'Pagos Recibidos'.")
+    return ws
 
 
 def _parsear_fecha(texto):
@@ -74,31 +75,8 @@ def _parse_monto_seguro(texto):
         return 0.0
 
 
-def _es_error_de_cuota(e):
-    """True si el error es un '429 Quota exceeded' de Google Sheets (demasiadas consultas
-    por minuto) — ese caso sí vale la pena reintentar un poco después. Cualquier otro tipo
-    de error (credenciales, hoja no encontrada, etc.) no se reintenta, porque esperar no
-    lo va a arreglar."""
-    texto = str(e)
-    return "429" in texto or "Quota exceeded" in texto or "RESOURCE_EXHAUSTED" in texto
-
-
-def _con_reintento(func, intentos=3, espera_inicial=5):
-    """Ejecuta 'func' (sin argumentos). Si Google Sheets responde '429 Quota exceeded'
-    (se hicieron demasiadas consultas seguidas), espera un poco y lo intenta de nuevo,
-    esperando cada vez más (5s, luego 15s) antes de rendirse. Esto evita que una ráfaga
-    de lecturas (como generar varios reportes seguidos) pierda datos por las puras."""
-    espera = espera_inicial
-    for intento in range(intentos):
-        try:
-            return func()
-        except Exception as e:
-            if not _es_error_de_cuota(e) or intento == intentos - 1:
-                raise
-            print(f"⚠️ Reportes: Google Sheets pidió esperar (cuota excedida), "
-                  f"reintentando en {espera}s (intento {intento + 1}/{intentos})...")
-            time.sleep(espera)
-            espera *= 3
+# _es_error_de_cuota y _con_reintento ahora viven en validaciones.py (compartidas por
+# todo el bot, no solo por los reportes) — se importan arriba.
 
 
 # ============ ALERTA SI UN REPORTE FALLA (antes solo quedaba en los logs de Railway, que
@@ -181,6 +159,44 @@ def _sumar_area(ws, col_fecha, col_monto_bs, col_monto_usd, col_persona, lunes, 
             persona = " ".join(persona.split()).upper()
             resumen["por_persona"][persona] = resumen["por_persona"].get(persona, 0.0) + monto_bs
     return resumen
+
+
+def _actividad_personal(ws, col_fecha, col_monto_bs, col_monto_usd, col_persona, objetivo, lunes, domingo):
+    """Como '_sumar_area', pero filtrado a UNA sola persona — para /mi-actividad, que le
+    muestra a cada cobrador/conciliador solo lo suyo (a diferencia del reporte semanal/mensual,
+    que junta a todo el mundo). 'objetivo' debe venir ya en mayúsculas. Nunca lanza error: si
+    algo falla, simplemente devuelve un resumen en cero (igual que '_sumar_area')."""
+    resultado = {"conteo": 0, "total_bs": 0.0, "total_usd": 0.0}
+    if ws is None or not col_persona:
+        return resultado
+    try:
+        idx_fecha = _con_reintento(lambda: _columna_por_nombre(ws, col_fecha))
+        idx_bs = _con_reintento(lambda: _columna_por_nombre(ws, col_monto_bs)) if col_monto_bs else None
+        idx_usd = _con_reintento(lambda: _columna_por_nombre(ws, col_monto_usd)) if col_monto_usd else None
+        idx_persona = _con_reintento(lambda: _columna_por_nombre(ws, col_persona))
+        if idx_fecha is None or idx_persona is None:
+            print(f"⚠️ /mi-actividad: no se encontró la columna de fecha/persona en '{getattr(ws, 'title', '?')}'.")
+            return resultado
+        valores = _con_reintento(lambda: ws.get_all_values())
+    except Exception as e:
+        print(f"⚠️ /mi-actividad: error abriendo '{getattr(ws, 'title', '?')}': {type(e).__name__}: {e}")
+        return resultado
+
+    def celda(fila, idx):
+        return fila[idx - 1].strip() if idx and len(fila) >= idx else ""
+
+    for fila in valores[1:]:
+        persona = " ".join(celda(fila, idx_persona).split()).upper()
+        if persona != objetivo:
+            continue
+        fecha_txt = celda(fila, idx_fecha).split()[0] if celda(fila, idx_fecha) else ""
+        fecha = _parsear_fecha(fecha_txt)
+        if fecha is None or not (lunes <= fecha <= domingo):
+            continue
+        resultado["conteo"] += 1
+        resultado["total_bs"] += _parse_monto_seguro(celda(fila, idx_bs)) if idx_bs else 0.0
+        resultado["total_usd"] += _parse_monto_seguro(celda(fila, idx_usd)) if idx_usd else 0.0
+    return resultado
 
 
 def _combinar_resumenes(*resumenes):
@@ -467,3 +483,106 @@ def probar_reporte_mensual(ack, body, client):
     )
     generar_reportes_mensuales()
 # ============ FIN REPORTE MENSUAL DE PAGOS ============
+
+
+# ============ COMANDO /mi-actividad (resumen personal, on-demand) ============
+# El reporte semanal/mensual junta a TODO el mundo por área; esto es lo mismo pero filtrado
+# a una sola persona, para que cada cobrador/conciliador pueda ver su propio avance sin
+# tener que pedírselo a un supervisor. Reutiliza el mismo mapeo cobrador->Slack ID de
+# /mis-promesas (promesas.py) y las mismas hojas/columnas que ya usa el reporte semanal.
+def _rango_semana_actual():
+    """Lunes de esta semana hasta HOY (no hasta el domingo — la semana todavía no terminó).
+    A diferencia de '_rango_semana_pasada', que siempre mira la semana YA CERRADA."""
+    hoy = datetime.now(ZoneInfo("America/Caracas")).date()
+    lunes_actual = hoy - timedelta(days=hoy.weekday())
+    return lunes_actual, hoy
+
+
+@app.command("/mi-actividad")
+def mi_actividad(ack, body, client):
+    ack()
+    canal = body["channel_id"]
+    usuario = body["user_id"]
+
+    nombre_cobrador = _cobrador_por_slack_id(usuario)
+    if not nombre_cobrador:
+        client.chat_postEphemeral(
+            channel=canal, user=usuario,
+            text="No te reconozco como cobrador en la lista. Pídele al administrador que agregue tu ID de Slack."
+        )
+        return
+
+    lunes_actual, hoy = _rango_semana_actual()
+    objetivo = nombre_cobrador.strip().upper()
+
+    lineas = [
+        f"📋 *Tu actividad de esta semana — {nombre_cobrador}*",
+        f"Semana: {lunes_actual.strftime('%d/%m/%Y')} al {hoy.strftime('%d/%m/%Y')}",
+        "──────────────────────────",
+    ]
+
+    # ---- Cobranzas (/cobro + /domiciliar): lo único que se guarda con columna 'Cobrador' ----
+    try:
+        r_cobro = _actividad_personal(_con_reintento(_abrir_hoja_pagos_recibidos), "Fecha", "MontoBs", "MontoUsd",
+                                       "Cobrador", objetivo, lunes_actual, hoy)
+        r_domic = _actividad_personal(_con_reintento(_abrir_hoja_domiciliacion), "Fecha", "Monto recuperado Bs",
+                                       "MontoUsd", "Cobrador", objetivo, lunes_actual, hoy)
+        conteo_cobranzas = r_cobro["conteo"] + r_domic["conteo"]
+        bs_cobranzas = r_cobro["total_bs"] + r_domic["total_bs"]
+        usd_cobranzas = r_cobro["total_usd"] + r_domic["total_usd"]
+        if conteo_cobranzas > 0:
+            lineas.append(f"💰 *Cobros/domiciliaciones reportados:* {conteo_cobranzas}  "
+                           f"— Bs. {bs_cobranzas:,.2f}  ·  ${usd_cobranzas:,.2f}")
+    except Exception as e:
+        print(f"⚠️ /mi-actividad ({nombre_cobrador}): error calculando Cobranzas: {type(e).__name__}: {e}")
+
+    # ---- Conciliación (/conciliar): columna 'Conciliador', no todos los cobradores la usan ----
+    try:
+        r_conc = _actividad_personal(_con_reintento(_abrir_hoja_conciliacion), "Fecha conciliación",
+                                      "Monto reportado", None, "Conciliador", objetivo, lunes_actual, hoy)
+        if r_conc["conteo"] > 0:
+            lineas.append(f"🧾 *Conciliaciones reportadas:* {r_conc['conteo']}  — Bs. {r_conc['total_bs']:,.2f}")
+    except Exception as e:
+        print(f"⚠️ /mi-actividad ({nombre_cobrador}): error calculando Conciliación: {type(e).__name__}: {e}")
+
+    # ---- Promesas de pago (Contactados): pendientes actuales + resultado de esta semana ----
+    try:
+        hoja = abrir_pestana_cacheada(os.environ["SHEET_ID"], "Contactados")
+        pendientes = cumplidas = falladas = 0
+        if hoja is not None:
+            valores = _con_reintento(lambda: hoja.get_all_values())
+            for i, fila in enumerate(valores):
+                if i == 0:
+                    continue
+
+                def celda(idx):
+                    return fila[idx].strip() if len(fila) > idx else ""
+
+                if celda(5).strip().upper() != objetivo:
+                    continue
+                estado = celda(7)
+                if not estado:
+                    f, _motivo = _parsear_fecha_radar(celda(4), hoy)
+                    if f is not None:
+                        pendientes += 1
+                    continue
+                f_resultado = _parsear_fecha(celda(8).split()[0] if celda(8) else "")
+                if f_resultado is None or not (lunes_actual <= f_resultado <= hoy):
+                    continue
+                if estado == "Cumplida":
+                    cumplidas += 1
+                elif estado == "Fallida":
+                    falladas += 1
+            if pendientes or cumplidas or falladas:
+                lineas.append(f"📞 *Promesas pendientes ahora:* {pendientes}")
+                if cumplidas or falladas:
+                    lineas.append(f"✅ *Cumplidas esta semana:* {cumplidas}   ❌ *Falladas esta semana:* {falladas}")
+    except Exception as e:
+        print(f"⚠️ /mi-actividad ({nombre_cobrador}): error calculando promesas: {type(e).__name__}: {e}")
+        lineas.append("⚠️ No se pudo leer el estado de tus promesas en este momento.")
+
+    if len(lineas) == 3:  # solo el encabezado, nada que reportar
+        lineas.append("Todavía no tienes actividad registrada esta semana.")
+
+    client.chat_postEphemeral(channel=canal, user=usuario, text="\n".join(lineas))
+# ============ FIN COMANDO /mi-actividad ============
