@@ -18,10 +18,15 @@ from motor_formularios import _resumen_metricas_hoy, _marcar_inicio_reporte, _ma
 # ============ RADAR DE PROMESAS DE PAGO (Fase 1) ============
 
 # Tabla nombre del cobrador (como aparece en el Sheet) -> ID(s) de Slack
+# NOTA (20/08/2026): la cuenta de Slack "Cobrador2" (U0B59P76H8U) era de Rebeca, y ahora la
+# usa Valentina — por eso esta entrada dice VALENTINA y no REBECA. Este es exactamente el tipo
+# de cambio que hay que actualizar aquí cada vez que alguien nuevo hereda la cuenta de Slack de
+# quien ya no está: si no se actualiza, /mis-promesas reconoce a la persona por su nombre VIEJO
+# y nunca encuentra sus contactos nuevos en el Sheet (que se guardan con el nombre actual).
 COBRADOR_SLACK_IDS = {
     "DIEGO": ["U0B3BAA8Y01", "U0B68124C9E"],
     "IARA": ["U0B58192UJH"],
-    "REBECA": ["U0B59P76H8U"],
+    "VALENTINA": ["U0B59P76H8U"],
     "MARIANGEL": ["U0B4QM8D3PH"],
     "LUISMAR": ["U0BA6BWJWBF"],
     "ANGELY": ["U0BA8AHVA3Z"],
