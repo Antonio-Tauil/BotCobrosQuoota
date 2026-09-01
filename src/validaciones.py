@@ -45,6 +45,49 @@ def parse_numero(texto):
 # ============ FIN FUNCIÓN parse_numero ============
 
 
+# ============ FUNCIÓN parse_tasa ============
+def parse_tasa(texto):
+    """Convierte a número el valor de una TASA BCV. A diferencia de un monto en bolívares
+    (que a veces se copia y pega de un comprobante bancario con separador de miles),
+    la tasa SIEMPRE se teclea a mano -- en /tasa-hoy, o en los formularios que piden
+    'Tasa BCV' escrita -- así que aquí NO hay ninguna ambigüedad que adivinar como sí hace
+    parse_numero(): un único separador (coma o punto), sin importar cuántos dígitos traiga
+    detrás, SIEMPRE es el separador decimal, nunca de miles.
+
+    Esto existe por el bug real del 01/09/2026: alguien puso la tasa como '798.326'
+    (setecientos noventa y ocho con trescientos veintiséis milésimas -- un valor de tasa
+    perfectamente normal ese día), y parse_numero(), al ver un solo separador con
+    EXACTAMENTE 3 dígitos después, lo confundió con un separador de miles y lo convirtió en
+    798326 -- mil veces más grande. Como el bug es simétrico (pasa igual con coma que con
+    punto, y con cualquier tasa que tenga justo 3 decimales, no fue un typo de una persona
+    en particular), todo lo que lee o escribe una tasa debe usar esta función en vez de
+    parse_numero(). Con parse_tasa(), tanto '798.326' como '798,326' se leen igual: 798.326.
+    """
+    if texto is None:
+        raise ValueError("vacío")
+    s = re.sub(r"[^0-9.,\-]", "", str(texto).strip())
+    neg = s.startswith("-")
+    s = s.lstrip("-").strip(".,")
+    if s == "":
+        raise ValueError("sin dígitos")
+    if "." in s and "," in s:
+        # Caso raro al teclear una tasa a mano, pero por si vinieran los dos separadores
+        # mezclados: el de más a la derecha es el decimal (igual que parse_numero), el otro
+        # se descarta como separador de miles.
+        if s.rfind(",") > s.rfind("."):
+            s = s.replace(".", "").replace(",", ".")
+        else:
+            s = s.replace(",", "")
+    else:
+        # Un solo tipo de separador (o ninguno): siempre es el decimal, sin importar cuántos
+        # dígitos tenga detrás -- nunca se asume separador de miles.
+        s = s.replace(",", ".")
+    if neg:
+        s = "-" + s
+    return float(s)
+# ============ FIN FUNCIÓN parse_tasa ============
+
+
 # ============ BLINDAJE ANTI-DUPLICADOS ============
 
 def _id_amigable(prefijo, ts):
