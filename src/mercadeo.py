@@ -15,7 +15,7 @@ from config import (
 )
 from validaciones import (
     _normalizar_encabezado, _guardar_fila_por_encabezado, _registro_ya_guardado,
-    _id_amigable, _ya_procesado, parse_numero, _validar_view, _reservar_mensaje,
+    _id_amigable, _ya_procesado, parse_numero, parse_tasa, _validar_view, _reservar_mensaje,
 )
 from motor_formularios import (
     FORM_SPECS, _abrir_formulario_generico, _validar_formulario_generico, _ejecutar_formulario_generico,
@@ -274,7 +274,7 @@ def recibir_conciliacion_mercadeo(ack, body, client):
         monto_bs_num = None
         monto_bs_fmt = f"Bs. {monto_bs_str}"
     try:
-        tasa_bcv_num = parse_numero(tasa_bcv_str)
+        tasa_bcv_num = parse_tasa(tasa_bcv_str)
         tasa_bcv_fmt = f"Bs. {tasa_bcv_num:,.4f}"
     except (ValueError, AttributeError):
         tasa_bcv_num = None
