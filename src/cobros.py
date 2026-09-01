@@ -17,7 +17,7 @@ from config import (
 from validaciones import (
     _normalizar_encabezado, _guardar_fila_por_encabezado, _columna_por_nombre,
     _registro_ya_guardado, _id_amigable, _ya_procesado, _solo_digitos, _quitar_acentos,
-    parse_numero, _es_fecha_valida, _reservar_mensaje, _buscar_duplicado_reciente,
+    parse_numero, parse_tasa, _es_fecha_valida, _reservar_mensaje, _buscar_duplicado_reciente,
     _con_reintento, _es_error_de_cuota,
 )
 from motor_formularios import (
@@ -797,7 +797,7 @@ def _calcular_domiciliacion(datos):
     cuenta_str = datos.get("cuenta", "")
     try:
         monto_bs_num = parse_numero(monto_bs_str)
-        tasa_bcv_num = parse_numero(tasa_bcv_str)
+        tasa_bcv_num = parse_tasa(tasa_bcv_str)
         monto_usd_str = f"${monto_bs_num/tasa_bcv_num:,.2f}"
         monto_bs_fmt = f"Bs. {monto_bs_num:,.2f}"
     except (ValueError, ZeroDivisionError):
@@ -954,7 +954,7 @@ def _calcular_monto_usd(datos):
     tasa_bcv_str = datos.get("tasa_bcv", "")
     try:
         monto_bs_num = parse_numero(monto_bs_str)
-        tasa_bcv_num = parse_numero(tasa_bcv_str)
+        tasa_bcv_num = parse_tasa(tasa_bcv_str)
         monto_usd_str = f"${monto_bs_num/tasa_bcv_num:,.2f}"
         monto_bs_fmt = f"Bs. {monto_bs_num:,.2f}"
     except (ValueError, ZeroDivisionError):
@@ -2323,7 +2323,7 @@ def _tasa_de_fecha(fecha_str):
             if len(fila) > col_fecha and str(fila[col_fecha]).strip() == fecha_str:
                 if len(fila) <= col_tasa or not fila[col_tasa]:
                     return None
-                num = parse_numero(fila[col_tasa])
+                num = parse_tasa(fila[col_tasa])
                 if num is None or num < TASA_MIN or num > TASA_MAX:
                     return None
                 return num
@@ -2407,7 +2407,7 @@ def _tasa_de_hoy():
         hoy_txt = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y")
         if str(fecha).strip().split()[0] != hoy_txt:
             return None
-        num = parse_numero(valor)
+        num = parse_tasa(valor)
         if num is None or num < TASA_MIN or num > TASA_MAX:
             return None
         return num
@@ -2489,7 +2489,7 @@ def tasa_hoy(ack, body, client):
             return
 
     try:
-        valor_num = parse_numero(valor_arg)
+        valor_num = parse_tasa(valor_arg)
     except (ValueError, ZeroDivisionError, TypeError):
         client.chat_postEphemeral(channel=canal, user=usuario,
             text=f"'{valor_arg}' no es una tasa válida. Ejemplo: `/tasa-hoy 520,50` o `/tasa-hoy 03/08/2026 148,90` para un día pasado.")
@@ -2523,7 +2523,7 @@ def tasa_hoy(ack, body, client):
         if not valor_ant:
             valor_ant = _ultima_tasa_registrada()  # si hoy no tenía tasa aún, compara contra la de ayer
         if valor_ant:
-            ant = parse_numero(valor_ant)
+            ant = parse_tasa(valor_ant)
             if ant and ant > 0:
                 cambio = abs(valor_num - ant) / ant
                 if cambio > TASA_CAMBIO_ALERTA:
