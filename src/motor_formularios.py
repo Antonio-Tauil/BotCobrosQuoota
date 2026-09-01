@@ -12,7 +12,7 @@ from config import app, get_cliente_busqueda, abrir_pestana_cacheada, guardar_pe
 from validaciones import (
     _validar_view, _registro_ya_guardado, _guardar_fila_por_encabezado, _id_amigable,
     _ya_procesado, _reservar_mensaje, _buscar_duplicado_reciente,
-    _normalizar_para_comparar, _columna_por_nombre, _solo_digitos, parse_numero,
+    _normalizar_para_comparar, _columna_por_nombre, _solo_digitos, parse_numero, parse_tasa,
     _con_reintento,
 )
 
@@ -554,7 +554,7 @@ def _publicar_para_aprobacion(nombre_spec, body, client):
     tasa_spec = spec.get("verificar_tasa")
     if tasa_spec:
         try:
-            tasa_escrita = parse_numero(datos_campos.get(tasa_spec["campo_tasa"], ""))
+            tasa_escrita = parse_tasa(datos_campos.get(tasa_spec["campo_tasa"], ""))
         except (ValueError, TypeError):
             tasa_escrita = None
         try:
