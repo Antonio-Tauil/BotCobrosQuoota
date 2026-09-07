@@ -23,6 +23,9 @@ from motor_formularios import _resumen_metricas_hoy, _marcar_inicio_reporte, _ma
 # de cambio que hay que actualizar aquí cada vez que alguien nuevo hereda la cuenta de Slack de
 # quien ya no está: si no se actualiza, /mis-promesas reconoce a la persona por su nombre VIEJO
 # y nunca encuentra sus contactos nuevos en el Sheet (que se guardan con el nombre actual).
+# NOTA (04/09/2026): mismo caso — la cuenta de Slack U0BLAV5EVSR era de Alejandro, y ahora la
+# usa Gendelc, por eso esta entrada dice GENDELC y no ALEJANDRO (ver también COBRADORES en
+# config.py, que es la lista que se le muestra al cobrador al reportar un cobro nuevo).
 COBRADOR_SLACK_IDS = {
     "DIEGO": ["U0B3BAA8Y01", "U0B68124C9E"],
     "IARA": ["U0B58192UJH"],
@@ -34,7 +37,7 @@ COBRADOR_SLACK_IDS = {
     "MARIANA": ["U0BHUF23EQY"],
     "ANDRES": ["U0BH22WRTQR"],
     "NELMAYRI": ["U0BK8E35T9A"],
-    "ALEJANDRO": ["U0BLAV5EVSR"],
+    "GENDELC": ["U0BLAV5EVSR"],
     "ISAAC": ["U0BL80V55DZ"],
     # BARBARA aún sin ID: se muestra en texto
 }
