@@ -1639,7 +1639,7 @@ def _texto_cobro_comercial_v2(datos_campos, fecha, usuario_slack):
         f"📅 *Fecha:* {fecha}\n"
         f"👤 *Reportado por:* <@{usuario_slack}>\n"
         f"📱 *Teléfono:* {telefono}\n"
-        f"🏢 *Empresa:* {empresa}\n"
+        f"🧑‍💼 *Nombre del Cobrador:* {empresa}\n"
         f"🏦 *Pago:* {forma_pago} · {banco}\n"
         f"💵 *Monto:* {monto_bs}  (≈ {monto_usd})\n"
         f"📊 *Tasa BCV:* {tasa_bcv}"
@@ -1677,7 +1677,7 @@ FORM_SPECS["cobro_comercial"] = {
             {"text": {"type": "plain_text", "text": "Otro"}, "value": "Otro"},
         ]},
         {"id": "tasa_bcv", "label": "Tasa BCV (Bs por USD)", "tipo": "texto"},
-        {"id": "empresa", "label": "Empresa", "tipo": "texto"},
+        {"id": "empresa", "label": "Nombre del Cobrador", "tipo": "texto"},
     ],
     "calcular": _calcular_monto_usd,
     "abrir_hoja": _abrir_hoja_comercial,
@@ -1706,7 +1706,7 @@ FORM_SPECS["cobro_comercial"] = {
     "campos_mensaje": [
         ("Cliente", "nombre"), ("Cédula", "cedula"), ("Teléfono", "telefono"),
         ("Monto Bs", "monto_bs"), ("Forma de Pago", "forma_pago"), ("Banco", "banco"),
-        ("Tasa BCV", "tasa_bcv"), ("Monto USD", "monto_usd"), ("Empresa", "empresa"),
+        ("Tasa BCV", "tasa_bcv"), ("Monto USD", "monto_usd"), ("Nombre del Cobrador", "empresa"),
     ],
     "construir_texto": _texto_cobro_comercial_v2,
 }
