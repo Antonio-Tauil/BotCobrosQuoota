@@ -56,7 +56,9 @@ PESTANA_HISTORIAL_TASAS = "Historial Tasas"   # Historial de tasas por fecha (co
 # Alejandro (mismo caso que Rebeca -> Valentina, ver comentario en promesas.py junto a
 # COBRADOR_SLACK_IDS). El nombre que aparece acá es el que se guarda en el Sheet en cada
 # cobro NUEVO, así que a partir de ahora los cobros de esa cuenta se reportan como GENDELC.
-COBRADORES = ["DIEGO", "IARA", "REBECA", "MARIANGEL", "LUISMAR", "ANGELY", "DANIEL", "BARBARA", "MARIANA", "ANDRES", "NELMAYRI", "GENDELC", "ISAAC", "VALENTINA", "CARLOS GUEVARA"]
+# NOTA (02/10/2026): "ISAAC" -> "LUZYANA" — mismo caso, Luzyana heredó la cuenta de
+# Slack de Isaac (ver comentario en promesas.py junto a COBRADOR_SLACK_IDS).
+COBRADORES = ["DIEGO", "IARA", "REBECA", "MARIANGEL", "LUISMAR", "ANGELY", "DANIEL", "BARBARA", "MARIANA", "ANDRES", "NELMAYRI", "GENDELC", "LUZYANA", "VALENTINA", "CARLOS GUEVARA"]
 
 
 def _opciones_cobradores():
