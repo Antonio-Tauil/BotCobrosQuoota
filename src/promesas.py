@@ -26,6 +26,9 @@ from motor_formularios import _resumen_metricas_hoy, _marcar_inicio_reporte, _ma
 # NOTA (04/09/2026): mismo caso — la cuenta de Slack U0BLAV5EVSR era de Alejandro, y ahora la
 # usa Gendelc, por eso esta entrada dice GENDELC y no ALEJANDRO (ver también COBRADORES en
 # config.py, que es la lista que se le muestra al cobrador al reportar un cobro nuevo).
+# NOTA (02/10/2026): mismo caso — la cuenta de Slack U0BL80V55DZ era de Isaac, y ahora la
+# usa Luzyana, por eso esta entrada dice LUZYANA y no ISAAC (ver también COBRADORES en
+# config.py).
 COBRADOR_SLACK_IDS = {
     "DIEGO": ["U0B3BAA8Y01", "U0B68124C9E"],
     "IARA": ["U0B58192UJH"],
@@ -38,7 +41,7 @@ COBRADOR_SLACK_IDS = {
     "ANDRES": ["U0BH22WRTQR"],
     "NELMAYRI": ["U0BK8E35T9A"],
     "GENDELC": ["U0BLAV5EVSR"],
-    "ISAAC": ["U0BL80V55DZ"],
+    "LUZYANA": ["U0BL80V55DZ"],
     # BARBARA aún sin ID: se muestra en texto
 }
 
