@@ -474,7 +474,38 @@ def _ejecutar_formulario_generico(nombre_spec, body, client):
     datos_campos = _extraer_valores_formulario(spec, valores_view)
     fecha = datetime.now(ZoneInfo("America/Caracas")).strftime("%d/%m/%Y")
 
-    _guardar_generico(nombre_spec, datos_campos, fecha)
+    usuario_slack = body["user"]["id"]
+    titulo = spec.get("titulo_mensaje", nombre_spec)
+    try:
+        resultado = _guardar_generico(nombre_spec, datos_campos, fecha)
+    except Exception as e:
+        # Google rechazó la escritura (ej. celda protegida, cuota, permisos): antes esto
+        # quedaba sin avisar y el mensaje se publicaba igual como si todo estuviera bien.
+        print(f"❌ [{nombre_spec}] Error guardando en el Sheet: {type(e).__name__}: {e}")
+        resultado = "ERROR"
+
+    if resultado != "OK":
+        # NO se publica en el canal (no hay nada guardado que reportar) — se avisa a la
+        # persona por DM para que vuelva a intentarlo, y al supervisor para que lo revise.
+        if resultado == "DUPLICADO":
+            aviso_usuario = f"⚠️ Tu registro de *{titulo}* ya estaba guardado, así que no se duplicó."
+        else:
+            aviso_usuario = (f"❌ *No se pudo guardar tu registro de {titulo}* en el Sheet. "
+                             f"No quedó registrado. Avisa a tu supervisor e inténtalo de nuevo en unos minutos.")
+        try:
+            client.chat_postMessage(channel=usuario_slack, text=aviso_usuario)
+        except Exception as e:
+            print(f"⚠️ No se pudo avisar por DM al usuario {usuario_slack}: {e}")
+        if resultado == "ERROR":
+            try:
+                client.chat_postMessage(
+                    channel=SUPERVISOR_ID,
+                    text=f"🚨 *Fallo al guardar* ({titulo}): <@{usuario_slack}> intentó registrar algo y NO se guardó en el Sheet. "
+                         f"Revisa los logs de Railway (puede ser una protección de rango, permisos o cuota)."
+                )
+            except Exception as e:
+                print(f"⚠️ No se pudo avisar al supervisor: {e}")
+        return
 
     if spec.get("canal"):
         usuario_slack = body["user"]["id"]
@@ -625,7 +656,11 @@ def _aprobar_generico(nombre_spec, body, client):
     registro_id = ""
     if spec.get("anti_duplicado"):
         registro_id = _id_amigable(spec.get("prefijo_id", nombre_spec.upper()), body["message"]["ts"])
-    resultado = _guardar_generico(nombre_spec, meta, fecha_original, registro_id)
+    try:
+        resultado = _guardar_generico(nombre_spec, meta, fecha_original, registro_id)
+    except Exception as e:
+        print(f"❌ [{nombre_spec}] Error guardando al aprobar: {type(e).__name__}: {e}")
+        resultado = "ERROR"
     titulo_mensaje = spec.get("titulo_mensaje", nombre_spec)
     if resultado == "DUPLICADO":
         encabezado = f"⚠️ *YA REGISTRADO* — ya estaba guardado, no se duplicó. Revisado por <@{body['user']['id']}> el {fecha_revision}"
