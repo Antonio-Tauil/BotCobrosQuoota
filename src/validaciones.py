@@ -228,6 +228,9 @@ def _normalizar_encabezado(texto):
 
 
 
+_LOCK_GUARDADO_FILA = threading.Lock()
+
+
 def _guardar_fila_por_encabezado(sheet, datos):
     """
     Guarda una fila nueva en 'sheet' colocando cada valor en la columna que le corresponde
@@ -254,10 +257,44 @@ def _guardar_fila_por_encabezado(sheet, datos):
         fila.append(valor_encontrado)
     # Cualquier dato que no tenía columna con ese nombre se agrega al final (siempre el mismo orden)
     fila.extend(restantes.values())
+
+    # ============ ESCRITURA EN LA PRIMERA FILA LIBRE (en vez de append_row) ============
+    # Antes se usaba sheet.append_row(fila), que le pide a Google "agrega esto al final de la
+    # tabla" — y Google ADIVINA dónde termina la tabla. Con Sheets que tienen formato de
+    # plantilla (dropdowns, bordes, tablas de totales al lado) esa adivinanza puede fallar y
+    # la fila cae muy abajo, fuera de la vista, aunque el log diga "guardado". Ahora se lee
+    # la columna A, se cuenta hasta la última fila con dato y se escribe justo debajo — así
+    # siempre se sabe en qué fila quedó. El candado evita que dos reportes simultáneos
+    # (el bot atiende varios comandos a la vez) elijan la MISMA fila y se pisen.
+    def _escribir_en_primera_fila_libre():
+        columna_a = sheet.col_values(1)
+        siguiente = len(columna_a) + 1
+        if siguiente > sheet.row_count:
+            sheet.add_rows(max(50, siguiente - sheet.row_count))
+        # "RAW" = igual que append_row: el texto se guarda tal cual (fechas, teléfonos, etc.)
+        respuesta = sheet.update(values=[fila], range_name=f"A{siguiente}", value_input_option="RAW")
+        return siguiente, respuesta
+
     # _con_reintento: este es el guardado real de un cobro/contacto/etc. — el paso más
     # importante de todos para reintentar si Google responde "cuota excedida" en ese
     # momento puntual, en vez de perder el registro por las puras.
-    _con_reintento(lambda: sheet.append_row(fila))
+    with _LOCK_GUARDADO_FILA:
+        numero_fila, respuesta = _con_reintento(_escribir_en_primera_fila_libre)
+
+    # Google confirma DÓNDE escribió (archivo, pestaña y celdas) y CUÁNTAS celdas cambió.
+    # Se deja en el log para poder comprobar que el dato cayó en el Sheet correcto, y si
+    # Google dice que no escribió nada, se lanza un error (en vez de dar el guardado por bueno).
+    respuesta = respuesta if isinstance(respuesta, dict) else {}
+    try:
+        nombre_archivo = sheet.spreadsheet.title
+    except Exception:
+        nombre_archivo = "?"
+    print(f"📍 Guardado en archivo '{nombre_archivo}' (id {respuesta.get('spreadsheetId', '?')}) "
+          f"→ {respuesta.get('updatedRange', f'fila {numero_fila}')} · "
+          f"{respuesta.get('updatedCells', '?')} celdas")
+    if respuesta.get("updatedCells") == 0:
+        raise RuntimeError(f"Google no escribió ninguna celda en '{sheet.title}' (fila {numero_fila}).")
+    # ============ FIN ESCRITURA EN LA PRIMERA FILA LIBRE ============
 
 
 
